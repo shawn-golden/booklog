@@ -538,6 +538,13 @@ details.more[open] { display: grid; gap: 10px; }
 .autosave[data-state="saved"] { color: var(--green); }
 .autosave[data-state="notitle"] { color: #c0392b; }
 
+/* ---------- Sync ---------- */
+.sync-box { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.sync-box .hint { margin: 0; }
+.sync-box a { color: var(--accent); font-weight: 600; }
+.sync-status[data-state="synced"] { color: var(--green); font-weight: 600; }
+.sync-status[data-state="error"] { color: #c0392b; font-weight: 600; }
+
 /* ---------- Larger screens (enhancements only) ---------- */
 @media (min-width: 600px) {
   main { padding-left: 24px; padding-right: 24px; }

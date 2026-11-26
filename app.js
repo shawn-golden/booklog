@@ -18,10 +18,34 @@
   }
   let state = load();
   let pillTimer;
+
+  // Change tracking: every save stamps edited books with updatedAt and records deletions,
+  // so devices can merge their libraries when syncing through GitHub.
+  const SYNC_KEY = 'booklog.sync'; // kept apart from the library so the token is never exported or published
+  let sync = (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (_) { return {}; } })();
+  const bookSig = ({ updatedAt, coverTried, ...rest }) => JSON.stringify(rest);
+  let snapshot = new Map();
+  const snap = () => { snapshot = new Map(state.books.map((b) => [b.id, bookSig(b)])); };
+  snap();
+  function stampChanges() {
+    const now = Date.now();
+    let changed = false;
+    state.deleted ||= {};
+    const ids = new Set();
+    for (const b of state.books) {
+      ids.add(b.id);
+      if (snapshot.get(b.id) !== bookSig(b)) { b.updatedAt = now; changed = true; }
+    }
+    for (const id of snapshot.keys()) if (!ids.has(id)) { state.deleted[id] = now; changed = true; }
+    snap();
+    return changed;
+  }
   function save(quiet = false) {
     try {
+      const changed = stampChanges();
       localStorage.setItem(STORE_KEY, JSON.stringify(state));
-      if (!quiet) showSavedPill();
+      if (!quiet) showSavedPill(sync.token ? '✓ Saved · syncing…' : '✓ Saved');
+      if (changed) schedulePush();
     } catch (e) { toast('Could not save — storage may be full or blocked.'); }
   }
   function showSavedPill(text = '✓ Saved') {
@@ -1295,6 +1319,7 @@
     setForm.goal.value = state.settings.goal;
     setForm.minPerPage.value = state.settings.minPerPage;
     $('#install-hint').textContent = installHint();
+    setSyncStatus(sync.status || (sync.token ? 'synced' : 'idle'));
     const lb = state.settings.lastBackup;
     $('#last-backup').textContent = lb ? `Last backup: ${new Date(lb).toLocaleDateString()}` : 'No backup yet.';
     setDlg.showModal();
@@ -1387,6 +1412,172 @@
       toast(added ? `Added ${added} new book${added === 1 ? '' : 's'} from the website 📚` : 'You’re up to date ✅');
     } catch (_) { toast('Couldn’t reach the website — are you offline?'); }
   });
+  // ---------- Sync with GitHub (data/books.json in your repo) ----------
+  const defaultRepo = () => location.hostname.endsWith('.github.io')
+    ? `${location.hostname.split('.')[0]}/${location.pathname.split('/')[1] || ''}`.replace(/\/$/, '')
+    : 'shawn-golden/booklog';
+  const saveSync = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); } catch (_) {} };
+  const b64enc = (str) => { const bytes = new TextEncoder().encode(str); let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(bin); };
+  const b64dec = (b64) => new TextDecoder().decode(Uint8Array.from(atob(b64.replace(/\s/g, '')), (c) => c.charCodeAt(0)));
+  const DATA_PATH = 'data/books.json';
+  function gh(path, opts = {}) {
+    return fetch(`https://api.github.com/repos/${sync.repo}/${path}`, {
+      cache: 'no-store', ...opts,
+      headers: { Authorization: `Bearer ${sync.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+    });
+  }
+  function mergeLibraries(local, remote) {
+    const deleted = { ...(remote.deleted || {}) };
+    for (const [id, t] of Object.entries(local.deleted || {})) deleted[id] = Math.max(deleted[id] || 0, t);
+    const remoteById = new Map((remote.books || []).map((b) => [b.id, b]));
+    let localNewer = false, remoteNewer = false;
+    const out = [];
+    for (const b of local.books) {
+      const r = remoteById.get(b.id);
+      remoteById.delete(b.id);
+      if (!r) { out.push(b); localNewer = true; continue; }
+      const lt = b.updatedAt || 0, rt = r.updatedAt || 0;
+      if (lt > rt) { out.push(b); localNewer = true; } else { out.push(lt === rt ? { ...r, coverTried: b.coverTried } : r); if (rt > lt) remoteNewer = true; }
+    }
+    for (const r of remoteById.values()) { out.push(r); remoteNewer = true; }
+    const books = out.filter((b) => !(deleted[b.id] && deleted[b.id] >= (b.updatedAt || 0)));
+    if (books.length !== out.length) remoteNewer = true;
+    const remoteIds = new Set((remote.books || []).map((b) => b.id));
+    if (Object.keys(local.deleted || {}).some((id) => remoteIds.has(id) && deleted[id] >= ((remote.books || []).find((b) => b.id === id)?.updatedAt || 0))) localNewer = true;
+    return { books, deleted, localNewer, remoteNewer };
+  }
+  function buildPayload() {
+    return {
+      app: 'booklog', version: 1, updatedAt: new Date().toISOString(),
+      books: state.books.map(({ coverTried, ...b }) => b),
+      deleted: state.deleted || {},
+      settings: { goal: state.settings.goal, minPerPage: state.settings.minPerPage },
+    };
+  }
+  async function pullAndMerge() {
+    const res = await gh(`contents/${DATA_PATH}?ref=main`);
+    if (res.status === 401 || res.status === 403) throw new Error('auth');
+    if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+    const j = await res.json();
+    sync.sha = j.sha; saveSync();
+    const remote = JSON.parse(b64dec(j.content));
+    const m = mergeLibraries({ books: state.books, deleted: state.deleted }, remote);
+    if (m.remoteNewer) {
+      state.books = m.books;
+      state.deleted = m.deleted;
+      snap();                 // these changes came from the website: don't re-stamp them
+      save(true);
+      render();
+    } else if (Object.keys(m.deleted).length !== Object.keys(state.deleted || {}).length) {
+      state.deleted = m.deleted; save(true);
+    }
+    return m;
+  }
+  let pushTimer = null, pushing = false, pushAgain = false;
+  function schedulePush() {
+    if (!sync.token) return;
+    if (pushing) { pushAgain = true; return; }
+    clearTimeout(pushTimer);
+    setSyncStatus('pending');
+    pushTimer = setTimeout(pushNow, 2500);
+  }
+  async function pushNow() {
+    clearTimeout(pushTimer); pushTimer = null;
+    if (!sync.token || pushing) return;
+    pushing = true; pushAgain = false;
+    setSyncStatus('syncing');
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!sync.sha) await pullAndMerge();
+        const res = await gh(`contents/${DATA_PATH}`, {
+          method: 'PUT',
+          body: JSON.stringify({ message: 'Update books from the Booklog app', content: b64enc(JSON.stringify(buildPayload(), null, 1)), sha: sync.sha, branch: 'main' }),
+        });
+        if (res.ok) {
+          sync.sha = (await res.json()).content.sha; sync.lastSyncAt = Date.now(); saveSync();
+          setSyncStatus('synced'); showSavedPill('☁️ Synced');
+          return;
+        }
+        if (res.status === 409 || res.status === 422) { await pullAndMerge(); continue; } // someone else saved first: merge and retry
+        if (res.status === 401 || res.status === 403) throw new Error('auth');
+        throw new Error(`GitHub said ${res.status}`);
+      }
+      throw new Error('kept conflicting — try Sync now');
+    } catch (e) {
+      setSyncStatus('error', e.message);
+      showSavedPill('⚠️ Saved on this device only');
+    } finally {
+      pushing = false;
+      if (pushAgain) schedulePush();
+    }
+  }
+  let lastPull = 0;
+  async function syncFromWebsite({ force = false } = {}) {
+    if (!sync.token || pushing) return;
+    if (!force && Date.now() - lastPull < 30000) return;
+    lastPull = Date.now();
+    setSyncStatus('syncing');
+    try {
+      const m = await pullAndMerge();
+      if (m.localNewer) await pushNow();
+      else { sync.lastSyncAt = Date.now(); saveSync(); setSyncStatus('synced'); }
+      return m;
+    } catch (e) { setSyncStatus('error', e.message); }
+  }
+  function ago(t) {
+    if (!t) return 'never';
+    const m = Math.round((Date.now() - t) / 60000);
+    return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+  }
+  function setSyncStatus(st, msg = '') {
+    sync.status = st;
+    if (st === 'error') { if (msg) sync.statusMsg = msg; else msg = sync.statusMsg || 'unknown error'; }
+    const el = document.getElementById('sync-status');
+    if (!el) return;
+    el.dataset.state = st;
+    el.textContent = st === 'error' ? (msg === 'auth' ? '⚠️ GitHub rejected the token — check it hasn’t expired and has Contents: Read and write.' : `⚠️ Couldn’t sync (${msg}). Your changes are safe on this device.`)
+      : !sync.token ? 'Not connected — changes stay on this device.'
+      : st === 'syncing' ? '☁️ Syncing with the website…'
+      : st === 'pending' ? '☁️ Changes waiting to sync…'
+      : `☁️ Connected to ${sync.repo} · last synced ${ago(sync.lastSyncAt)}`;
+    $('#sync-connect').hidden = !!sync.token;
+    $('#sync-connected').hidden = !sync.token;
+    $('#sync-btn').closest('.btn-row').hidden = !!sync.token;
+  }
+  $('#sync-connect-btn').addEventListener('click', async () => {
+    const token = $('#sync-token').value.trim();
+    const repo = ($('#sync-repo').value.trim() || defaultRepo()).replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
+    if (!token) { toast('Paste your GitHub token first'); return; }
+    sync = { token, repo }; saveSync();
+    setSyncStatus('syncing');
+    try {
+      const res = await gh('');
+      if (res.status === 401 || res.status === 403 || res.status === 404) throw new Error(res.status === 404 ? 'repo not found — check the name' : 'auth');
+      const info = await res.json();
+      if (info.permissions && !info.permissions.push) throw new Error('auth');
+      $('#sync-token').value = '';
+      await syncFromWebsite({ force: true });
+      if (sync.status !== 'error') toast('☁️ Connected! Changes now sync to the website.');
+    } catch (e) {
+      sync = {}; saveSync();
+      setSyncStatus('error', e.message);
+      toast(e.message === 'auth' ? 'That token didn’t work — check its permissions.' : `Couldn’t connect: ${e.message}`);
+    }
+  });
+  $('#sync-now').addEventListener('click', async () => {
+    const m = await syncFromWebsite({ force: true });
+    if (sync.status === 'synced') toast(m && m.remoteNewer ? 'Got the latest from your other devices ☁️' : 'All synced ✅');
+  });
+  $('#sync-disconnect').addEventListener('click', () => {
+    if (!confirm('Disconnect this device? Your books stay here, but changes will stop syncing.')) return;
+    sync = {}; saveSync(); setSyncStatus('idle'); toast('Disconnected. Changes stay on this device.');
+  });
+  function startSync() {
+    $('#sync-repo').placeholder = defaultRepo();
+    setSyncStatus(sync.token ? 'synced' : 'idle');
+    if (sync.token) syncFromWebsite({ force: true });
+  }
+
   function celebrateImport(n) {
     confetti(200);
     setTimeout(stopConfetti, 4000);
@@ -1457,12 +1648,15 @@
 
   // ---------- Boot ----------
   setTab(ui.tab);
-  loadPublishedOnFirstVisit();
+  loadPublishedOnFirstVisit().finally(startSync);
   maybeNudgeBackup();
   if (state.books.some((b) => !b.coverUrl && !b.isbn && !b.coverTried)) setTimeout(fillMissingCovers, 2000);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   }
   // Re-render when returning to the app (e.g. new day → hero pace updates).
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { render(); syncFromWebsite(); }
+    else if (pushTimer) pushNow(); // leaving the app: send pending changes right away
+  });
 })();

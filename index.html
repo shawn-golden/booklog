@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=6" />
+  <link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
   <header class="topbar">
@@ -243,8 +243,21 @@
       </div>
       <p class="hint">Import accepts a Booklog backup (.json) or a Goodreads library export (.csv).</p>
       <div class="btn-row"><button type="button" class="btn" id="covers-btn">🖼️ Find missing covers</button></div>
+      <div class="field-label">Sync with the website ☁️</div>
+      <p class="hint sync-status" id="sync-status" aria-live="polite">Not connected — changes stay on this device.</p>
+      <div id="sync-connect" class="sync-box">
+        <label>GitHub token <input type="password" id="sync-token" autocomplete="off" spellcheck="false" placeholder="github_pat_…" /></label>
+        <label>Repository <input id="sync-repo" autocomplete="off" spellcheck="false" placeholder="owner/booklog" /></label>
+        <p class="hint">One-time setup: <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">create a fine-grained token</a> → Repository access: <b>Only select repositories</b> → <b>booklog</b> → Permissions: <b>Contents: Read and write</b> → Generate, then paste it here. It stays on this device only.</p>
+        <button type="button" class="btn primary" id="sync-connect-btn">Connect</button>
+      </div>
+      <div id="sync-connected" hidden>
+        <div class="btn-row">
+          <button type="button" class="btn" id="sync-now">☁️ Sync now</button>
+          <button type="button" class="btn danger ghost" id="sync-disconnect">Disconnect</button>
+        </div>
+      </div>
       <div class="btn-row"><button type="button" class="btn" id="sync-btn">🔄 Get latest books from the website</button></div>
-      <p class="hint">Your library is published with the site. Changes you make here stay on this device until you publish them (see the README).</p>
       <p class="hint" id="last-backup"></p>
 
       <div class="field-label">Add to your phone</div>
@@ -305,6 +318,6 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
