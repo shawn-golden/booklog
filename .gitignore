@@ -1,0 +1,5 @@
+imports/
+.claude/
+.DS_Store
+# Personal reading list used to build the import file
+tools/make_import.py
