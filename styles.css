@@ -587,6 +587,19 @@ details.more[open] { display: grid; gap: 10px; }
 .rec-person small { font: 500 12px var(--sans); }
 .rec-empty { margin: 4px 2px 6px; }
 
+/* ---------- Hide recommendations ---------- */
+.upnext-card { position: relative; }
+.rec-x { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border: 0; border-radius: 50%; background: var(--surface-2); color: var(--ink-2); font-size: 13px; }
+.upnext-card .un-info { padding-right: 28px; }
+.rec-wrap { display: grid; gap: 2px; }
+.rec-hide { justify-self: end; border: 0; background: none; color: var(--ink-2); font-size: 12px; font-weight: 600; padding: 4px 6px; min-height: 30px; }
+.rec-hidden { margin-top: 18px; }
+.rec-hidden summary { cursor: pointer; color: var(--ink-2); font-weight: 600; font-size: 14px; padding: 8px 2px; }
+.rec-hidden-list { display: grid; gap: 8px; margin-top: 6px; }
+.rec-hidden-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--surface); font-size: 14px; }
+.rec-hidden-row small { color: var(--ink-2); }
+.rec-hidden-row .un-btn { margin: 0; flex: none; }
+
 /* ---------- Larger screens (enhancements only) ---------- */
 @media (min-width: 600px) {
   main { padding-left: 24px; padding-right: 24px; }

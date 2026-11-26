@@ -472,20 +472,54 @@
     </div>`;
   }
 
+  const hiddenSeries = () => new Set(state.settings.hiddenSeries || []);
+  // A TBR book you've already read (same title, ignoring "(Series)" notes) never counts as a recommendation
+  const titleKey = (t) => norm(String(t || '').replace(/\s*\(.*?\)\s*/g, ' '));
+  function alreadyRead(b) {
+    const k = titleKey(b.title), ln = lastName(b.author);
+    return readBooks().some((r) => titleKey(r.title) === k && (!ln || !r.author || lastName(r.author) === ln));
+  }
   function recommendations() {
-    const tbr = tbrBooks();
-    const upNext = seriesUpNext();
-    const fromFriends = tbr.filter((b) => recBy(b));
+    const tbr = tbrBooks().filter((b) => !alreadyRead(b));
+    const visible = tbr.filter((b) => !b.recHidden);
+    const hs = hiddenSeries();
+    const allUpNext = seriesUpNext();
+    const upNext = allUpNext.filter((u) => !hs.has(u.name));
+    const fromFriends = visible.filter((b) => recBy(b));
     const readAuthors = new Set(readBooks().map((b) => lastName(b.author)).filter(Boolean));
-    const fromLoved = tbr.filter((b) => !recBy(b) && b.author && readAuthors.has(lastName(b.author)));
-    return { upNext, fromFriends, fromLoved, count: upNext.filter((u) => !u.onTbr).length + fromFriends.length + fromLoved.length };
+    const fromLoved = visible.filter((b) => !recBy(b) && b.author && readAuthors.has(lastName(b.author)));
+    const hidden = { series: allUpNext.filter((u) => hs.has(u.name)), books: tbr.filter((b) => b.recHidden && (recBy(b) || (b.author && readAuthors.has(lastName(b.author))))) };
+    return { upNext, fromFriends, fromLoved, hidden, count: upNext.filter((u) => !u.onTbr).length + fromFriends.length + fromLoved.length };
   }
   function upNextCard(u) {
-    return `<div class="upnext-card">${miniCovers(u.books.slice(-1), 1)}
+    return `<div class="upnext-card"><button type="button" class="rec-x" data-hide-series="${esc(u.name)}" aria-label="Hide ${esc(u.name)} from recommendations">✕</button>${miniCovers(u.books.slice(-1), 1)}
       <div class="un-info"><b>${esc(u.name)}</b><small>Book ${u.next} of ${u.total}${u.author ? ' · ' + esc(u.author) : ''} · you've read ${u.done}</small>
         ${u.onTbr ? `<button type="button" class="un-btn on" data-edit="${u.onTbr.id}">✓ On your TBR: ${esc(u.onTbr.title)}</button>` : `<button type="button" class="un-btn" data-upnext="${esc(u.name)}">+ Add book ${u.next}</button>`}
       </div></div>`;
   }
+  let showHiddenRecs = false;
+  function recBookCard(b) {
+    return `<div class="rec-wrap">${tbrCard(b)}<button type="button" class="rec-hide" data-hide-book="${b.id}">✕ Hide from recommendations</button></div>`;
+  }
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-hide-series],[data-unhide-series],[data-hide-book],[data-unhide-book]');
+    if (!t) return;
+    const set = hiddenSeries();
+    if (t.dataset.hideSeries) {
+      const name = t.dataset.hideSeries;
+      set.add(name); state.settings.hiddenSeries = [...set]; save(); schedulePush(); renderTbr();
+      toast(`Hid ${name} from recommendations`, 'Undo', () => { const s2 = hiddenSeries(); s2.delete(name); state.settings.hiddenSeries = [...s2]; save(); schedulePush(); renderTbr(); });
+    } else if (t.dataset.unhideSeries) {
+      set.delete(t.dataset.unhideSeries); state.settings.hiddenSeries = [...set]; save(); schedulePush(); renderTbr();
+    } else {
+      const b = state.books.find((x) => x.id === (t.dataset.hideBook || t.dataset.unhideBook));
+      if (!b) return;
+      if (t.dataset.hideBook) {
+        b.recHidden = true; save(); renderTbr();
+        toast(`Hid “${b.title}” from recommendations (still on your TBR)`, 'Undo', () => { delete b.recHidden; save(); renderTbr(); });
+      } else { delete b.recHidden; save(); renderTbr(); }
+    }
+  });
   function renderRecs() {
     const el = $('#tbr-list');
     const { upNext, fromFriends, fromLoved } = recommendations();
@@ -498,14 +532,23 @@
       const people = {};
       fromFriends.forEach((b) => (people[recBy(b)] ||= []).push(b));
       for (const [who, list] of Object.entries(people).sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]))) {
-        html += `<h3 class="rec-person">From ${esc(who)} <small>${list.length}</small></h3>` + sortBooks(list, 'title').map(tbrCard).join('');
+        html += `<h3 class="rec-person">From ${esc(who)} <small>${list.length}</small></h3>` + sortBooks(list, 'title').map(recBookCard).join('');
       }
     } else html += `<p class="hint rec-empty">Write “Recommended by Name” in a TBR book's notes and it shows up here.</p>`;
     if (fromLoved.length) {
       html += `<h2 class="group-head">💛 More from authors you love <small>${fromLoved.length}</small></h2>`
-        + sortBooks(fromLoved, 'author').map(tbrCard).join('');
+        + sortBooks(fromLoved, 'author').map(recBookCard).join('');
+    }
+    const { hidden } = recommendations();
+    const nHidden = hidden.series.length + hidden.books.length;
+    if (nHidden) {
+      html += `<details class="rec-hidden"${showHiddenRecs ? ' open' : ''}><summary>Hidden from recommendations (${nHidden})</summary><div class="rec-hidden-list">
+        ${hidden.series.map((u) => `<div class="rec-hidden-row"><span>⏭️ ${esc(u.name)} <small>series</small></span><button type="button" class="un-btn on" data-unhide-series="${esc(u.name)}">Show again</button></div>`).join('')}
+        ${hidden.books.map((b) => `<div class="rec-hidden-row"><span>📕 ${esc(b.title)}${b.author ? ` <small>${esc(b.author)}</small>` : ''}</span><button type="button" class="un-btn on" data-unhide-book="${b.id}">Show again</button></div>`).join('')}
+      </div></details>`;
     }
     el.innerHTML = html;
+    el.querySelector('.rec-hidden')?.addEventListener('toggle', (e) => { showHiddenRecs = e.target.open; });
   }
   bindSeg($('#tbr-view'), (v) => { ui.tbrView = v; saveUi(); renderTbr(); window.scrollTo({ top: 0 }); });
 
@@ -1699,7 +1742,7 @@
       app: 'booklog', version: 1, updatedAt: new Date().toISOString(),
       books: state.books.map(({ coverTried, ...b }) => b),
       deleted: state.deleted || {},
-      settings: { goal: state.settings.goal, minPerPage: state.settings.minPerPage },
+      settings: { goal: state.settings.goal, minPerPage: state.settings.minPerPage, hiddenSeries: state.settings.hiddenSeries || [] },
     };
   }
   async function pullAndMerge() {
@@ -1710,6 +1753,11 @@
     sync.sha = j.sha; saveSync();
     const remote = JSON.parse(b64dec(j.content));
     const m = mergeLibraries({ books: state.books, deleted: state.deleted }, remote);
+    // Hidden series: keep the union of what any device hid
+    const rh = remote.settings?.hiddenSeries || [], lh = state.settings.hiddenSeries || [];
+    const unionHidden = [...new Set([...lh, ...rh])];
+    if (unionHidden.length !== lh.length) { state.settings.hiddenSeries = unionHidden; save(true); render(); }
+    if (rh.length !== unionHidden.length) m.localNewer = true;
     if (m.remoteNewer) {
       state.books = m.books;
       state.deleted = m.deleted;
