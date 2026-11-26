@@ -29,7 +29,7 @@ Then open http://localhost:8765. To try it on your phone, use the same Wi‑Fi a
 
 > Your book data is **not** in the repo. It stays on each device, so a public repo is fine.
 
-**Releasing changes:** bump `VERSION` in `sw.js` (e.g. `booklog-v2`) whenever you edit the app, so installed phones pick up the update.
+**Releasing changes:** bump `VERSION` in `sw.js` and the `?v=` numbers in `index.html` whenever you edit the app, so every device picks up the update.
 
 ## Make it feel like an app on your phone
 **iPhone (Safari):** open your GitHub Pages URL → tap **Share** (□↑) → **Add to Home Screen** → **Add**. It opens full-screen with its own icon, no browser bars.

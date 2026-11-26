@@ -1,7 +1,7 @@
 // Booklog service worker: makes the app open instantly and work offline.
-// Bump VERSION whenever you change index.html, styles.css, or app.js so phones pick up the update.
+// When you change the app: bump VERSION here AND the ?v= numbers in index.html (and SHELL below) so every device gets the update.
 const VERSION = 'booklog-v4';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
+const SHELL = ['./', 'index.html', 'styles.css?v=4', 'app.js?v=4', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 const COVERS = 'booklog-covers';
 
 self.addEventListener('install', (e) => {
