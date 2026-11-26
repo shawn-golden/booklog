@@ -577,6 +577,16 @@ details.more[open] { display: grid; gap: 10px; }
 .celebrate-next .btn { width: 100%; }
 .hbars.wide-n .hbar { grid-template-columns: minmax(0, 9em) 1fr 4.4em; }
 
+/* ---------- TBR tabs / Recommended ---------- */
+.tbr-tabs { margin: 4px 0 12px; }
+.seg-count { display: inline-block; min-width: 20px; margin-left: 4px; padding: 1px 6px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 800; line-height: 16px; }
+.seg-count:empty { display: none; }
+.upnext-list { display: grid; gap: 10px; }
+.upnext-list .upnext-card { flex: none; max-width: none; }
+.rec-person { margin: 10px 2px 0; font: 700 16px var(--serif); color: var(--ink-2); display: flex; align-items: baseline; gap: 6px; }
+.rec-person small { font: 500 12px var(--sans); }
+.rec-empty { margin: 4px 2px 6px; }
+
 /* ---------- Larger screens (enhancements only) ---------- */
 @media (min-width: 600px) {
   main { padding-left: 24px; padding-right: 24px; }

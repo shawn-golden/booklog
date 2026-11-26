@@ -472,7 +472,50 @@
     </div>`;
   }
 
+  function recommendations() {
+    const tbr = tbrBooks();
+    const upNext = seriesUpNext();
+    const fromFriends = tbr.filter((b) => recBy(b));
+    const readAuthors = new Set(readBooks().map((b) => lastName(b.author)).filter(Boolean));
+    const fromLoved = tbr.filter((b) => !recBy(b) && b.author && readAuthors.has(lastName(b.author)));
+    return { upNext, fromFriends, fromLoved, count: upNext.filter((u) => !u.onTbr).length + fromFriends.length + fromLoved.length };
+  }
+  function upNextCard(u) {
+    return `<div class="upnext-card">${miniCovers(u.books.slice(-1), 1)}
+      <div class="un-info"><b>${esc(u.name)}</b><small>Book ${u.next} of ${u.total}${u.author ? ' · ' + esc(u.author) : ''} · you've read ${u.done}</small>
+        ${u.onTbr ? `<button type="button" class="un-btn on" data-edit="${u.onTbr.id}">✓ On your TBR: ${esc(u.onTbr.title)}</button>` : `<button type="button" class="un-btn" data-upnext="${esc(u.name)}">+ Add book ${u.next}</button>`}
+      </div></div>`;
+  }
+  function renderRecs() {
+    const el = $('#tbr-list');
+    const { upNext, fromFriends, fromLoved } = recommendations();
+    let html = '';
+    html += `<h2 class="group-head">⏭️ Up next in your series <small>${upNext.length}</small></h2>`;
+    html += upNext.length ? `<div class="upnext-list">${upNext.map(upNextCard).join('')}</div>`
+      : `<p class="hint rec-empty">You're caught up on every series you've started 🎉</p>`;
+    html += `<h2 class="group-head">🌀 Recommended by friends <small>${fromFriends.length}</small></h2>`;
+    if (fromFriends.length) {
+      const people = {};
+      fromFriends.forEach((b) => (people[recBy(b)] ||= []).push(b));
+      for (const [who, list] of Object.entries(people).sort((x, y) => y[1].length - x[1].length || cmpStr(x[0], y[0]))) {
+        html += `<h3 class="rec-person">From ${esc(who)} <small>${list.length}</small></h3>` + sortBooks(list, 'title').map(tbrCard).join('');
+      }
+    } else html += `<p class="hint rec-empty">Write “Recommended by Name” in a TBR book's notes and it shows up here.</p>`;
+    if (fromLoved.length) {
+      html += `<h2 class="group-head">💛 More from authors you love <small>${fromLoved.length}</small></h2>`
+        + sortBooks(fromLoved, 'author').map(tbrCard).join('');
+    }
+    el.innerHTML = html;
+  }
+  bindSeg($('#tbr-view'), (v) => { ui.tbrView = v; saveUi(); renderTbr(); window.scrollTo({ top: 0 }); });
+
   function renderTbr() {
+    const recsMode = ui.tbrView === 'recs';
+    setSeg($('#tbr-view'), recsMode ? 'recs' : 'list');
+    const rc = recommendations().count;
+    $('#recs-count').textContent = rc ? String(rc) : '';
+    $('#tbr-tools').hidden = recsMode;
+    if (recsMode) { renderRecs(); return; }
     $('#tbr-sort').value = ui.tbrSort;
     const q = $('#tbr-search').value.trim();
     const all = tbrBooks();
@@ -498,14 +541,6 @@
     if (!list.length) { el.innerHTML = `<div class="empty"><div class="big">🔎</div><p>No books match.</p></div>`; return; }
     const filtered = list.length !== all.length;
     let html = `<p class="hint" style="margin:0 2px 2px">${filtered ? `${list.length} of ${all.length} books` : `${all.length} book${all.length === 1 ? '' : 's'} waiting`} · tap ◯ when you finish one</p>`;
-    const upNext = !q && !ui.tbrMood ? seriesUpNext() : [];
-    if (upNext.length) {
-      html += `<div class="upnext"><h2 class="group-head">⏭️ Up next in your series <small>${upNext.length}</small></h2><div class="upnext-row">${upNext.map((u) => `
-        <div class="upnext-card">${miniCovers(u.books.slice(-1), 1)}
-          <div class="un-info"><b>${esc(u.name)}</b><small>Book ${u.next} of ${u.total}${u.author ? ' · ' + esc(u.author) : ''}</small>
-            ${u.onTbr ? `<button type="button" class="un-btn on" data-edit="${u.onTbr.id}">✓ On your TBR</button>` : `<button type="button" class="un-btn" data-upnext="${esc(u.name)}">+ Add book ${u.next}</button>`}
-          </div></div>`).join('')}</div></div>`;
-    }
     const top = list.filter((b) => b.priority);
     const rest = list.filter((b) => !b.priority);
     if (top.length) html += `<h2 class="group-head top">⭐ Top of the list <small>${top.length}</small></h2>` + top.map(tbrCard).join('');
