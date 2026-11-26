@@ -38,10 +38,15 @@ Then open http://localhost:8765. To try it on your phone, use the same Wi‑Fi a
 
 ⚠️ On iPhone, the home-screen app keeps **separate storage from Safari**. Add it to your home screen *first* and log books there. If you already logged some in Safari, export a backup there and import it into the home-screen app.
 
-## Getting your books onto a device
-Your library isn't in the repo (it's private). It lives in `imports/booklog-backup.json` on your computer.
-- **On this computer:** open http://localhost:8765. When the shelf is empty, tap **📥 Load my books from this computer**.
-- **On your phone:** AirDrop (or iCloud Drive) `imports/booklog-backup.json` to your phone and save it to Files. Then open the home-screen app → ⚙️ Settings → **Import backup** → pick the file.
+## Your library on the website
+Your books are published with the site in `data/books.json`. The first time you open Booklog on any device, it loads them automatically.
+
+The site asks search engines not to index it (`noindex` tags), but anyone with the link can still open it.
+
+**Edits stay on the device you make them on.** To publish changes so every device gets them:
+1. In the app: ⚙️ Settings → **Export backup** (saves `booklog-backup-YYYY-MM-DD.json`).
+2. Replace `data/books.json` in this folder with that file (keep the name `books.json`).
+3. Commit and push. On your other devices: ⚙️ Settings → **🔄 Get latest books from the website**.
 
 ## Things to know
 - **Data lives on one device.** There's no account or cloud sync. Export a backup now and then (the app reminds you monthly). To sync across devices you'd need a backend; see ideas below.

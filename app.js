@@ -299,7 +299,7 @@
     const list = sortBooks(all.filter((b) => (ui.readFormat === 'all' || (b.format || 'read') === ui.readFormat) && matches(b, q)), ui.readSort);
     const el = $('#read-list');
     if (!all.length) {
-      el.innerHTML = `<div class="empty"><div class="big">📖</div><h3>Your shelf is waiting</h3><p>Log a book you've finished — even old favorites count.</p>${localBackup ? `<button class="btn primary" data-local-load>📥 Load my books from this computer</button><br>` : ''}<button class="btn ${localBackup ? '' : 'primary'}" data-add="read">Log a book</button></div>`;
+      el.innerHTML = `<div class="empty"><div class="big">📖</div><h3>Your shelf is waiting</h3><p>Log a book you've finished — even old favorites count.</p><button class="btn primary" data-add="read">Log a book</button></div>`;
       return;
     }
     if (!list.length) { el.innerHTML = `<div class="empty"><div class="big">🔎</div><p>No books match.</p></div>`; return; }
@@ -1246,14 +1246,15 @@
     $('#last-backup').textContent = `Last backup: ${new Date().toLocaleDateString()}`;
     toast('Backup saved ✅');
   });
-  function importText(text, name = '') {
+  function importText(text, name = '', opts = {}) {
     try {
       let incoming, isCsv = false;
       if (/\.csv$/i.test(name) || text.startsWith('Book Id')) { incoming = fromGoodreads(text); isCsv = true; }
       else {
         const j = JSON.parse(text);
         incoming = j.books;
-        if (j.settings) state.settings = { ...state.settings, ...j.settings };
+        if (j.settings && !opts.quiet) state.settings = { ...state.settings, ...j.settings };
+        else if (j.settings && !state.books.length) state.settings = { ...state.settings, ...j.settings, lastBackup: state.settings.lastBackup };
       }
       if (!Array.isArray(incoming)) throw new Error('bad file');
       // Merge: skip duplicates by id or by title+author.
@@ -1274,7 +1275,7 @@
       }
       save(); if (setDlg.open) setDlg.close(); render();
       const needCovers = state.books.some((b) => !b.coverUrl && !b.coverTried && !b.noAutoCover);
-      toast(`Imported ${added} book${added === 1 ? '' : 's'} 📚${needCovers ? ' Finding covers…' : ''}`);
+      if (!opts.quiet) toast(`Imported ${added} book${added === 1 ? '' : 's'} 📚${needCovers ? ' Finding covers…' : ''}`);
       if (needCovers) fillMissingCovers();
       return added;
     } catch (err) {
@@ -1288,27 +1289,38 @@
     importText(await file.text(), file.name);
   });
 
-  // On your own computer (localhost), offer to load the backup saved in the Booklog folder.
-  // The imports/ folder is never published, so this only ever appears locally.
-  let localBackup = null;
-  async function checkLocalBackup() {
-    if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) || state.books.length) return;
-    try {
-      const res = await fetch('imports/booklog-backup.json', { cache: 'no-store' });
-      if (!res.ok) return;
-      localBackup = await res.text();
-      render();
-    } catch (_) { /* not there */ }
+  // ---------- Published library (data/books.json on the website) ----------
+  // First visit on any device: load the published books automatically.
+  // Later: Settings → "Get latest books" adds anything new from the website.
+  const PUBLISHED_URL = 'data/books.json';
+  async function fetchPublished() {
+    const res = await fetch(PUBLISHED_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error('no published library');
+    return res.text();
   }
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('[data-local-load]') || !localBackup) return;
-    const added = importText(localBackup, 'booklog-backup.json');
-    if (added) { localBackup = null; celebrateImport(added); }
+  async function loadPublishedOnFirstVisit() {
+    if (state.books.length || state.settings.publishedLoaded) return;
+    try {
+      const text = await fetchPublished();
+      const added = importText(text, 'books.json', { quiet: true });
+      state.settings.publishedLoaded = true;
+      state.settings.lastBackup = Date.now(); // the website copy counts as a fresh backup
+      save();
+      if (added) celebrateImport(added);
+    } catch (_) { /* offline or no published file: start empty */ }
+  }
+  $('#sync-btn').addEventListener('click', async () => {
+    try {
+      const before = state.books.length;
+      importText(await fetchPublished(), 'books.json', { quiet: true });
+      const added = state.books.length - before;
+      toast(added ? `Added ${added} new book${added === 1 ? '' : 's'} from the website 📚` : 'You’re up to date ✅');
+    } catch (_) { toast('Couldn’t reach the website — are you offline?'); }
   });
   function celebrateImport(n) {
     confetti(200);
     setTimeout(stopConfetti, 4000);
-    toast(`Welcome back! ${n} books loaded 📚`);
+    toast(`Your library is here — ${n} books 📚`);
   }
   $('#covers-btn').addEventListener('click', () => {
     const missing = state.books.filter((b) => !b.coverUrl && !b.noAutoCover);
@@ -1375,7 +1387,7 @@
 
   // ---------- Boot ----------
   setTab(ui.tab);
-  checkLocalBackup();
+  loadPublishedOnFirstVisit();
   maybeNudgeBackup();
   if (state.books.some((b) => !b.coverUrl && !b.isbn && !b.coverTried)) setTimeout(fillMissingCovers, 2000);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
