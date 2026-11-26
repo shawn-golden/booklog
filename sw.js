@@ -1,6 +1,6 @@
 // Booklog service worker: makes the app open instantly and work offline.
 // Bump VERSION whenever you change index.html, styles.css, or app.js so phones pick up the update.
-const VERSION = 'booklog-v3';
+const VERSION = 'booklog-v4';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 const COVERS = 'booklog-covers';
 
@@ -42,7 +42,7 @@ self.addEventListener('fetch', (e) => {
   // App shell: network-first (so updates show up), falling back to cache offline.
   if (url.origin === location.origin) {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-cache' }) // always check GitHub for a newer copy
         .then((res) => { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); return res; })
         .catch(() => caches.match(req).then((r) => r || caches.match('index.html')))
     );
