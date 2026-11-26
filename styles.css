@@ -427,6 +427,7 @@ details.more[open] { display: grid; gap: 10px; }
 }
 @keyframes star-pop { 0% { transform: scale(.4) rotate(-30deg); } 60% { transform: scale(1.35) rotate(12deg); } 100% { transform: none; } }
 @keyframes sparkle { to { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(.3); opacity: 0; } }
+.meta .note.rec { color: var(--accent); font-weight: 600; }
 .meta .note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 
 

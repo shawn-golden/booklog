@@ -236,9 +236,17 @@
     };
     return [...list].sort(by[mode] || by.title);
   }
+  const recBy = (b) => (/recommended by\s+([^\n,.;]+)/i.exec(b.notes || '') || [])[1]?.trim() || '';
   function matches(b, q) {
     if (!q) return true;
     q = q.toLowerCase();
+    // 🌀 = books someone recommended to you ("🌀 liz" narrows it to one person)
+    if (/🌀|\brecs?\b|recommended/.test(q)) {
+      const who = recBy(b);
+      if (!who) return false;
+      const rest = q.replace(/🌀|\brecs?\b|recommended( by)?/g, '').trim();
+      return !rest || who.toLowerCase().includes(rest) || (b.title || '').toLowerCase().includes(rest);
+    }
     return (b.title || '').toLowerCase().includes(q) || (b.author || '').toLowerCase().includes(q) || (b.notes || '').toLowerCase().includes(q)
       || (b.series || '').toLowerCase().includes(q) || (b.tags || []).some((tg) => tg.toLowerCase().includes(q));
   }
@@ -333,7 +341,7 @@
           <div class="card-text">
             <h3>${esc(b.title)}</h3>
             ${b.author ? `<p class="by">${esc(b.author)}</p>` : ''}
-            <div class="meta">${b.spice ? `<span class="spice">${spiceStr(b.spice)}</span>` : ''}${b.pages ? `<span>${fmt(b.pages)} pp</span>` : ''}${b.notes ? `<span class="note">${/^recommended by/i.test(b.notes) ? '🌀' : '📝'} ${esc(b.notes.split('\n')[0].slice(0, 40))}</span>` : ''}</div>
+            <div class="meta">${b.spice ? `<span class="spice">${spiceStr(b.spice)}</span>` : ''}${b.pages ? `<span>${fmt(b.pages)} pp</span>` : ''}${recBy(b) ? `<span class="note rec">🌀 from ${esc(recBy(b))}</span>` : b.notes ? `<span class="note">📝 ${esc(b.notes.split('\n')[0].slice(0, 40))}</span>` : ''}</div>
             ${b.tags?.length ? `<div class="card-tags">${b.tags.slice(0, 3).map((tg) => `<span>${esc(tg)}</span>`).join('')}</div>` : ''}
           </div>
         </button>
@@ -353,11 +361,15 @@
     // Mood filter: tropes plus a few spice/priority shortcuts
     const moodSel = $('#tbr-mood');
     const usedTags = [...new Set(all.flatMap((b) => b.tags || []))].sort(cmpStr);
-    const moods = [['', 'Mood: Anything'], ['@top', '⭐ Top of the list'], ['@spicy', '🌶️ Spicy (3+)'], ['@mild', '🍵 Low spice (0–1)'], ...usedTags.map((tg) => [tg, '💘 ' + tg])];
+    const recPeople = [...new Set(all.map(recBy).filter(Boolean))].sort(cmpStr);
+    const moods = [['', 'Mood: Anything'], ['@top', '⭐ Top of the list'],
+      ...(recPeople.length ? [['@rec', '🌀 Recommended to me'], ...recPeople.map((p) => ['@rec:' + p, `🌀 From ${p}`])] : []),
+      ['@spicy', '🌶️ Spicy (3+)'], ['@mild', '🍵 Low spice (0–1)'], ...usedTags.map((tg) => [tg, '💘 ' + tg])];
     if (!moods.some(([v]) => v === ui.tbrMood)) ui.tbrMood = '';
     moodSel.innerHTML = moods.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
     moodSel.value = ui.tbrMood || '';
-    const moodOk = (b) => !ui.tbrMood || (ui.tbrMood === '@top' ? b.priority : ui.tbrMood === '@spicy' ? (b.spice || 0) >= 3
+    const moodOk = (b) => !ui.tbrMood || (ui.tbrMood === '@top' ? b.priority : ui.tbrMood === '@rec' ? !!recBy(b)
+      : ui.tbrMood.startsWith('@rec:') ? recBy(b) === ui.tbrMood.slice(5) : ui.tbrMood === '@spicy' ? (b.spice || 0) >= 3
       : ui.tbrMood === '@mild' ? (b.spice || 0) <= 1 : (b.tags || []).includes(ui.tbrMood));
     const list = sortBooks(all.filter((b) => matches(b, q) && moodOk(b)), ui.tbrSort);
     const el = $('#tbr-list');
@@ -366,7 +378,8 @@
       return;
     }
     if (!list.length) { el.innerHTML = `<div class="empty"><div class="big">🔎</div><p>No books match.</p></div>`; return; }
-    let html = `<p class="hint" style="margin:0 2px 2px">${all.length} book${all.length === 1 ? '' : 's'} waiting · tap ◯ when you finish one</p>`;
+    const filtered = list.length !== all.length;
+    let html = `<p class="hint" style="margin:0 2px 2px">${filtered ? `${list.length} of ${all.length} books` : `${all.length} book${all.length === 1 ? '' : 's'} waiting`} · tap ◯ when you finish one</p>`;
     const top = list.filter((b) => b.priority);
     const rest = list.filter((b) => !b.priority);
     if (top.length) html += `<h2 class="group-head top">⭐ Top of the list <small>${top.length}</small></h2>` + top.map(tbrCard).join('');
