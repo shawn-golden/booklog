@@ -286,20 +286,39 @@
       || (b.series || '').toLowerCase().includes(q) || (b.tags || []).some((tg) => tg.toLowerCase().includes(q));
   }
 
-  function readCard(b) {
+  // One card per book: reading it, listening to it and re-reads are grouped together.
+  const newestFirst = (a, b) => (bookYear(b) || 0) - (bookYear(a) || 0) || cmpStr(b.dateFinished, a.dateFinished) || (b.addedAt || 0) - (a.addedAt || 0);
+  function groupReads(list) {
+    const map = new Map();
+    for (const b of list) { const k = workKey(b); (map.get(k) || map.set(k, []).get(k)).push(b); }
+    return [...map.values()].map((logs) => {
+      logs.sort(newestFirst);
+      const rep = logs[0];
+      // Show the best info across all the logs of this book
+      const pick = (f) => logs.map((x) => x[f]).find(Boolean);
+      return { ...rep, logs, coverUrl: pick('coverUrl') || rep.coverUrl, pages: pick('pages') || rep.pages, author: rep.author || pick('author'),
+        rating: Math.max(0, ...logs.map((x) => x.rating || 0)), spice: Math.max(0, ...logs.map((x) => x.spice || 0)),
+        tags: [...new Set(logs.flatMap((x) => x.tags || []))], audioMinutes: pick('audioMinutes') };
+    });
+  }
+  function readCard(g) {
+    const logs = g.logs || [g];
+    const reads = logs.filter((x) => x.format !== 'listen').length, listens = logs.length - reads;
+    const how = reads && listens ? '📖🎧 Read & listened' : listens ? '🎧 Listened' : '📖 Read';
     const meta = [
-      b.format === 'listen' ? '🎧 Listened' : '📖 Read',
-      b.dateFinished ? fmtDate(b.dateFinished) : (b.year ? String(b.year) : ''),
-      b.format === 'listen' && b.audioMinutes ? fmtDuration(b.audioMinutes) : (b.pages ? `${fmt(b.pages)} pp` : ''),
+      how,
+      g.dateFinished ? fmtDate(g.dateFinished) : (g.year ? String(g.year) : ''),
+      g.pages ? `${fmt(g.pages)} pp` : (g.audioMinutes ? fmtDuration(g.audioMinutes) : ''),
     ].filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
+    const times = logs.length > 1 ? `<span class="times-badge" aria-label="Logged ${logs.length} times">×${logs.length}</span>` : '';
     return `<article class="card">
-      <button class="card-main" data-edit="${b.id}" aria-label="Edit ${esc(b.title)}">
-        ${coverHTML(b)}
+      <button class="card-main" data-edit="${g.id}" aria-label="Edit ${esc(g.title)}">
+        <span class="cover-wrap">${coverHTML(g)}${times}</span>
         <div class="card-text">
-          <h3>${esc(b.title)}</h3>
-          ${b.author ? `<p class="by">${esc(b.author)}</p>` : ''}
-          <div class="meta">${meta}${b.rating ? `<span class="stars" aria-label="${b.rating} stars">${starStr(b.rating)}</span>` : ''}${b.spice ? `<span class="spice" aria-label="Spice ${b.spice} of 5">${spiceStr(b.spice)}</span>` : ''}</div>
-          ${b.tags?.length ? `<div class="card-tags">${b.tags.slice(0, 3).map((tg) => `<span>${esc(tg)}</span>`).join('')}</div>` : ''}
+          <h3>${esc(g.title)}</h3>
+          ${g.author ? `<p class="by">${esc(g.author)}</p>` : ''}
+          <div class="meta">${meta}${g.rating ? `<span class="stars" aria-label="${g.rating} stars">${starStr(g.rating)}</span>` : ''}${g.spice ? `<span class="spice" aria-label="Spice ${g.spice} of 5">${spiceStr(g.spice)}</span>` : ''}</div>
+          ${g.tags?.length ? `<div class="card-tags">${g.tags.slice(0, 3).map((tg) => `<span>${esc(tg)}</span>`).join('')}</div>` : ''}
         </div>
       </button>
     </article>`;
@@ -339,7 +358,10 @@
     $('#read-sort').value = ui.readSort;
     const q = $('#read-search').value.trim();
     const all = readBooks();
-    const list = sortBooks(all.filter((b) => (ui.readFormat === 'all' || (b.format || 'read') === ui.readFormat) && matches(b, q)), ui.readSort);
+    const matching = all.filter((b) => matches(b, q));
+    // Group every log of a book together, then keep groups that fit the Read/Listened filter
+    const groups = groupReads(matching).filter((g) => ui.readFormat === 'all' || g.logs.some((x) => (x.format || 'read') === ui.readFormat));
+    const list = sortBooks(groups, ui.readSort);
     const el = $('#read-list');
     if (!all.length) {
       el.innerHTML = `<div class="empty"><div class="big">📖</div><h3>Your shelf is waiting</h3><p>Log a book you've finished — even old favorites count.</p><button class="btn primary" data-add="read">Log a book</button></div>`;
@@ -348,12 +370,16 @@
     if (!list.length) { el.innerHTML = `<div class="empty"><div class="big">🔎</div><p>No books match.</p></div>`; return; }
     if (ui.readSort === 'year') {
       let html = '', cur;
-      const counts = {};
-      list.forEach((b) => { const y = bookYear(b) || 'Unknown'; counts[y] = (counts[y] || 0) + 1; });
-      for (const b of list) {
-        const y = bookYear(b) || 'Unknown';
-        if (y !== cur) { cur = y; html += `<h2 class="group-head">${y === 'Unknown' ? 'Year unknown' : y} <small>${counts[y]} book${counts[y] === 1 ? '' : 's'}</small></h2>`; }
-        html += readCard(b);
+      const counts = {}, logCounts = {};
+      list.forEach((g) => { const y = bookYear(g) || 'Unknown'; counts[y] = (counts[y] || 0) + 1; logCounts[y] = (logCounts[y] || 0) + g.logs.length; });
+      for (const g of list) {
+        const y = bookYear(g) || 'Unknown';
+        if (y !== cur) {
+          cur = y;
+          const extra = logCounts[y] !== counts[y] ? ` · ${logCounts[y]} reads & listens` : '';
+          html += `<h2 class="group-head">${y === 'Unknown' ? 'Year unknown' : y} <small>${counts[y]} book${counts[y] === 1 ? '' : 's'}${extra}</small></h2>`;
+        }
+        html += readCard(g);
       }
       el.innerHTML = html;
     } else {
@@ -524,7 +550,7 @@
 
     // Cover wall
     if (sel.length) {
-      const wall = sortBooks(sel, 'year');
+      const wall = sortBooks(groupReads(sel), 'year');
       html += `<div class="panel"><h3>Cover wall</h3><div class="wall">${wall.map((b) => `<button class="card-main" style="display:block" data-edit="${b.id}" aria-label="${esc(b.title)}">${coverHTML(b)}</button>`).join('')}</div></div>`;
     }
     body.innerHTML = html;
@@ -845,6 +871,24 @@
   }
   ['title', 'coverUrl', 'isbn'].forEach((n) => F[n].addEventListener('change', updateCoverPreview));
 
+  function renderSiblings(book) {
+    const box = $('#f-siblings');
+    const logs = book && book.status === 'read' ? readBooks().filter((x) => workKey(x) === workKey(book)).sort(newestFirst) : [];
+    if (logs.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
+    box.hidden = false;
+    box.innerHTML = `<div class="field-label">You've logged this ${logs.length} times</div><div class="sib-list">${logs.map((x, i) => {
+      const when = x.dateFinished ? fmtDate(x.dateFinished) : (x.year || 'Year unknown');
+      return `<button type="button" class="sib${x.id === book.id ? ' current' : ''}" data-sib="${x.id}">${x.format === 'listen' ? '🎧 Listened' : '📖 Read'} · ${esc(String(when))}${x.notes === 'Re-read' ? ' · re-read' : ''}</button>`;
+    }).join('')}</div><p class="hint" style="margin-top:6px">Tap one to edit it. To log another read or listen, tap + and add the book again.</p>`;
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sib]');
+    if (!b || b.classList.contains('current')) return;
+    const target = state.books.find((x) => x.id === b.dataset.sib);
+    if (!target) return;
+    bookDlg.close();
+    setTimeout(() => openBookDialog(target), 120);
+  });
   function openBookDialog(book, presetStatus) {
     editing = book || null;
     picked = {};
@@ -876,6 +920,7 @@
     syncFormVisibility();
     updateCoverPreview();
     editStart = book ? { status: book.status, badges: earnedBadges() } : null;
+    renderSiblings(book);
     clearTimeout(autosaveTimer); autosaveTimer = null;
     autosaveEl.hidden = !book;
     if (book) setAutosave('idle');
