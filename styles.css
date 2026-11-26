@@ -556,6 +556,27 @@ details.more[open] { display: grid; gap: 10px; }
 .sib { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 600; }
 .sib.current { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+/* ---------- Up next in your series ---------- */
+.upnext { margin-bottom: 4px; }
+.upnext-row { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 2px 16px 8px; scroll-snap-type: x mandatory; }
+.upnext-row::-webkit-scrollbar { display: none; }
+.upnext-card { flex: 0 0 78%; max-width: 300px; scroll-snap-align: start; display: flex; gap: 10px; align-items: center; padding: 10px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.upnext-card .mini-stack .cover { width: 44px; }
+.un-info { min-width: 0; display: grid; gap: 2px; }
+.un-info b { font-family: var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.un-info small { color: var(--ink-2); font-size: 12px; }
+.un-btn { justify-self: start; margin-top: 4px; border: 0; border-radius: 999px; min-height: 32px; padding: 0 12px; font-size: 13px; font-weight: 700; background: var(--accent); color: #fff; }
+.un-btn.on { background: var(--surface-2); color: var(--green); }
+
+/* ---------- Milestones & stats ---------- */
+.celebrate-card.milestone { background: linear-gradient(160deg, var(--surface) 60%, color-mix(in srgb, var(--gold) 30%, var(--surface))); box-shadow: 0 0 0 3px var(--gold), 0 20px 60px rgba(0,0,0,.35); }
+.celebrate-card.milestone h2 { font-size: 26px; }
+.ms-chip { background: var(--gold) !important; color: #2b2118; }
+.celebrate-next { margin: -4px 0 12px; }
+.celebrate-next:empty { display: none; }
+.celebrate-next .btn { width: 100%; }
+.hbars.wide-n .hbar { grid-template-columns: minmax(0, 9em) 1fr 4.4em; }
+
 /* ---------- Larger screens (enhancements only) ---------- */
 @media (min-width: 600px) {
   main { padding-left: 24px; padding-right: 24px; }

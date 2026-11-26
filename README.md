@@ -8,7 +8,11 @@ A mobile-first reading tracker: books you've read, books you want to read next, 
 - **Read list:** sort by year read, title, author, rating, or recently added. Filter 📖 Read / 🎧 Listened. Search.
 - **TBR:** A→Z with letter headers. Tap ◯ to mark read (with confetti). Tap ☆ to pin to ⭐ Top of the list. 🛒 Buy links. Mood filter (⭐, 🌀 recommendations by person, 🌶️ spice, tropes). Search `🌀` for recommended books.
 - **Book details:** covers (Open Library, Apple Books, Google Books), series, spice 🌶️ (0–5), trope tags, notes.
-- **Stats:** totals, goal ring, read vs. listen, series tracker, top authors, re-reads, page-count personality, TBR health, spice meter, favorite tropes, recommendation scoreboard, badges, cover wall, and a shareable 🎁 Wrapped card.
+- **Stats:** totals, goal ring, read vs. listen, series tracker, top authors, pages per author, biggest sagas, weight of your books, re-reads, page-count personality, TBR health, spice meter, favorite tropes, recommendation scoreboard, badges, cover wall, and a shareable 🎁 Wrapped card.
+- **Up next in your series:** see which series you're partway through and add the next book in one tap.
+- **Milestones:** gold celebrations at 100 books, 50,000 pages, 20 series finished, and more.
+- **Cover colors:** the app's accent color follows the cover of your latest book (toggle in Settings).
+- **Siri:** "Hey Siri, log a book" (see below).
 - **Autosave:** edits save as you make them, with a ✓ Saved status.
 - **Sync:** connect each device to GitHub once and every change syncs everywhere.
 
@@ -49,6 +53,21 @@ To restore from a backup file: ⚙️ Settings → **Import backup** → pick th
 4. Open Booklog from the new icon from now on. It has its own storage, separate from Safari, so connect sync there.
 
 **Android (Chrome):** ⋮ → **Add to Home screen** / **Install app**.
+
+## Log a book with Siri 🎙️
+Say **"Hey Siri, log a book"**, say the title, and Booklog opens ready to log it. If the book is on your TBR, it jumps straight to "You finished it!"; otherwise it opens Add a book with the title already searched.
+
+**Set it up once (iPhone, about 2 minutes):**
+1. Open the **Shortcuts** app → tap **+** (top right).
+2. Tap **Add Action**, search **Ask for Input**, and add it. Set the prompt to *What book did you finish?*
+3. Add **URL Encode** (it encodes the *Provided Input*).
+4. Add **URL**. In Booklog go to ⚙️ Settings → **📋 Copy Siri link** and paste it here. Then tap right after `log=` and insert the **URL Encoded Text** variable. It should look like `https://shawn-golden.github.io/booklog/?log=` followed by the variable.
+5. Add **Open URLs**.
+6. Tap the name at the top, rename it **Log a book**, then tap **Done**.
+
+Now say "Hey Siri, log a book". Tip: Shortcuts opens links in **Safari**, which keeps its own storage, so connect **Sync** in Safari too. Then anything you log there shows up in your home-screen app.
+
+Want a "to read" version too? Make a second shortcut using `?add=` instead of `?log=`, for example "Hey Siri, add to my TBR".
 
 ## Run it locally
 ```bash

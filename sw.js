@@ -1,7 +1,7 @@
 // Booklog service worker: makes the app open instantly and work offline.
 // When you change the app: bump VERSION here AND the ?v= numbers in index.html (and SHELL below) so every device gets the update.
-const VERSION = 'booklog-v8';
-const SHELL = ['./', 'index.html', 'styles.css?v=8', 'app.js?v=8', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
+const VERSION = 'booklog-v10';
+const SHELL = ['./', 'index.html', 'styles.css?v=10', 'app.js?v=10', 'manifest.json', 'icons/icon-192.png', 'icons/apple-touch-icon.png'];
 const COVERS = 'booklog-covers';
 
 self.addEventListener('install', (e) => {
@@ -26,7 +26,8 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(
       caches.open(COVERS).then(async (cache) => {
         const hit = await cache.match(req);
-        if (hit) return hit;
+        // A CORS request (used to sample cover colors) can't use an opaque cached copy
+        if (hit && !(req.mode === 'cors' && hit.type === 'opaque')) return hit;
         try {
           const res = await fetch(req);
           if (res.ok || res.type === 'opaque') cache.put(req, res.clone());

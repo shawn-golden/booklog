@@ -122,6 +122,63 @@
     wrap.textContent = title.slice(0, 40);
   }, true);
 
+  // ---------- Cover-color theme: the app's accent follows your latest book ----------
+  const COLOR_KEY = 'booklog.colors';
+  let colorCache = (() => { try { return JSON.parse(localStorage.getItem(COLOR_KEY)) || {}; } catch (_) { return {}; } })();
+  function latestRead() {
+    return readBooks().filter((b) => coverSrc(b)).sort((a, b) => cmpStr(b.dateFinished || '', a.dateFinished || '') || (b.finishedAt || 0) - (a.finishedAt || 0) || (b.updatedAt || 0) - (a.updatedAt || 0) || (b.addedAt || 0) - (a.addedAt || 0))[0];
+  }
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    const d = max - min, s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h * 60, s, l];
+  }
+  function coverColor(url) {
+    return new Promise((resolve) => {
+      if (url in colorCache) return resolve(colorCache[url]);
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const c = document.createElement('canvas'); c.width = 24; c.height = 36;
+          const x = c.getContext('2d'); x.drawImage(img, 0, 0, 24, 36);
+          const d = x.getImageData(0, 0, 24, 36).data, buckets = {};
+          for (let i = 0; i < d.length; i += 4) {
+            const [h, sat, l] = rgbToHsl(d[i], d[i + 1], d[i + 2]);
+            if (sat < 0.25 || l < 0.12 || l > 0.88) continue; // skip greys, blacks, whites
+            const k = Math.round(h / 20) % 18, w = sat * (1 - Math.abs(l - 0.5));
+            const bk = (buckets[k] ||= { w: 0, h: 0, s: 0 });
+            bk.w += w; bk.h += h * w; bk.s += sat * w;
+          }
+          const best = Object.values(buckets).sort((p, q) => q.w - p.w)[0];
+          const out = best && best.w > 1 ? { h: Math.round(best.h / best.w), s: best.s / best.w } : null;
+          colorCache[url] = out;
+          try { localStorage.setItem(COLOR_KEY, JSON.stringify(colorCache)); } catch (_) {}
+          resolve(out);
+        } catch (_) { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      // A separate URL keeps this colour-sampling copy apart from the normal (non-CORS) cover image
+      img.src = url + (url.includes('?') ? '&' : '?') + 'bl-color=1';
+    });
+  }
+  async function applyCoverTheme() {
+    const rootEl = document.documentElement;
+    const b = state.settings.coverTheme === false ? null : latestRead();
+    const hsl = b ? await coverColor(coverSrc(b)) : null;
+    if (!hsl) { rootEl.style.removeProperty('--accent'); return; }
+    const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+    const sat = Math.round(Math.min(72, Math.max(42, hsl.s * 100)));
+    const yellowish = hsl.h >= 35 && hsl.h <= 85; // white text needs a darker shade of yellow/gold
+    rootEl.style.setProperty('--accent', `hsl(${hsl.h} ${sat}% ${(dark ? 52 : 42) - (yellowish ? 10 : 0)}%)`);
+    const meta = document.getElementById('theme-from');
+    if (meta) meta.textContent = `Colors from “${b.title}”`;
+  }
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyCoverTheme);
+
   // ---------- Buy links ----------
   function buyLinks(b) {
     const q = encodeURIComponent(`${b.title} ${b.author || ''}`.trim());
@@ -441,6 +498,14 @@
     if (!list.length) { el.innerHTML = `<div class="empty"><div class="big">🔎</div><p>No books match.</p></div>`; return; }
     const filtered = list.length !== all.length;
     let html = `<p class="hint" style="margin:0 2px 2px">${filtered ? `${list.length} of ${all.length} books` : `${all.length} book${all.length === 1 ? '' : 's'} waiting`} · tap ◯ when you finish one</p>`;
+    const upNext = !q && !ui.tbrMood ? seriesUpNext() : [];
+    if (upNext.length) {
+      html += `<div class="upnext"><h2 class="group-head">⏭️ Up next in your series <small>${upNext.length}</small></h2><div class="upnext-row">${upNext.map((u) => `
+        <div class="upnext-card">${miniCovers(u.books.slice(-1), 1)}
+          <div class="un-info"><b>${esc(u.name)}</b><small>Book ${u.next} of ${u.total}${u.author ? ' · ' + esc(u.author) : ''}</small>
+            ${u.onTbr ? `<button type="button" class="un-btn on" data-edit="${u.onTbr.id}">✓ On your TBR</button>` : `<button type="button" class="un-btn" data-upnext="${esc(u.name)}">+ Add book ${u.next}</button>`}
+          </div></div>`).join('')}</div></div>`;
+    }
     const top = list.filter((b) => b.priority);
     const rest = list.filter((b) => !b.priority);
     if (top.length) html += `<h2 class="group-head top">⭐ Top of the list <small>${top.length}</small></h2>` + top.map(tbrCard).join('');
@@ -538,6 +603,13 @@
       if (allPages) facts.push(['🗼', `Stacked up, that's about <b>${(allPages * 0.1 / 100).toFixed(1)} m</b> of paper`]);
       if (allPages >= 1225) facts.push(['📜', `That's <b>War and Peace ${(allPages / 1225).toFixed(1)}×</b> over`]);
       if (hours >= 40) facts.push(['💼', `Like <b>${(hours / 40).toFixed(1)} full work weeks</b> of nothing but books`]);
+      if (allPages >= 500) {
+        // ~1 g per printed page (paperback)
+        const lbs = allPages / 453.6, kg = allPages / 1000;
+        const things = [[10, 'a house cat 🐈'], [20, 'a Thanksgiving turkey 🦃'], [35, 'a car tire 🛞'], [70, 'a golden retriever 🐕'], [130, 'a kangaroo 🦘'], [250, 'a giant panda 🐼'], [600, 'a grand piano 🎹'], [1e9, 'a small car 🚗']];
+        const like = things.reduce((best, t) => Math.abs(Math.log(lbs / t[0])) < Math.abs(Math.log(lbs / best[0])) ? t : best)[1];
+        facts.push(['⚖️', `Printed out, that's about <b>${fmt(lbs)} lbs</b> (${fmt(kg)} kg) of books — roughly ${like}`]);
+      }
       if (facts.length) html += `<div class="panel"><h3>Fun facts</h3><ul class="facts">${facts.map(([e, t]) => `<li><span>${e}</span><span>${t}</span></li>`).join('')}</ul></div>`;
     }
 
@@ -577,6 +649,28 @@
       return { ...m, done, total, complete: m.total && done >= m.total };
     }).sort((a, b) => (b.complete - a.complete) || (b.done / b.total - a.done / a.total) || b.done - a.done);
   }
+  function seriesUpNext() {
+    const tbr = tbrBooks();
+    return seriesProgress().filter((x) => !x.complete && x.total > x.done).map((x) => {
+      const nums = new Set([...x.nums].filter((n) => typeof n === 'number'));
+      let next = 1;
+      while (nums.has(next)) next++;
+      if (next > x.total) return null;
+      const onTbr = tbr.find((b) => b.series === x.name && +b.seriesNo === next);
+      return { ...x, next, onTbr };
+    }).filter(Boolean);
+  }
+  function addUpNext(name) {
+    const u = seriesUpNext().find((x) => x.name === name);
+    if (!u) return;
+    openBookDialog(null, 'tbr', { series: u.name, seriesNo: u.next, seriesTotal: u.total, author: u.author || '', query: u.author || u.name });
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-upnext]');
+    if (!b) return;
+    if (!$('#celebrate').hidden) closeCelebrate();
+    addUpNext(b.dataset.upnext);
+  });
   function moreStats(sel) {
     let html = '';
 
@@ -691,6 +785,24 @@
       } else {
         html += `<div class="panel"><h3>Favorite tropes 💘</h3><p class="hint">Tag tropes like “Fae” or “Enemies to lovers” when you edit a book, and your favorites show up here.</p></div>`;
       }
+    }
+
+    // Biggest sagas: series by total pages (each book counted once)
+    const sagas = seriesProgress().map((x) => ({ ...x, pages: x.books.reduce((n, b) => n + num(b.pages), 0) })).filter((x) => x.pages).sort((a, b) => b.pages - a.pages).slice(0, 5);
+    if (sagas.length) {
+      const maxP = sagas[0].pages;
+      html += `<div class="panel"><h3>Biggest sagas 🏔️</h3><p class="hint" style="margin:-6px 0 10px">Your longest series by total pages</p>
+        <div class="hbars wide-n">${sagas.map((x) => `<div class="hbar"><span class="hl">${esc(x.name)}<small>${x.done}/${x.total} books${x.complete ? ' ✓' : ''}</small></span><span class="htrack"><i style="width:${(x.pages / maxP) * 100}%"></i></span><span class="hn">${fmt(x.pages)}</span></div>`).join('')}</div></div>`;
+    }
+
+    // Pages per author (every read & listen counts, like your totals)
+    const pa = {};
+    sel.forEach((b) => { if (b.author && num(b.pages)) pa[b.author] = (pa[b.author] || 0) + num(b.pages); });
+    const topPa = Object.entries(pa).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    if (topPa.length) {
+      const maxA = topPa[0][1];
+      html += `<div class="panel"><h3>Pages per author ✍️</h3>
+        <div class="hbars wide-n">${topPa.map(([name, p]) => `<div class="hbar"><span class="hl">${esc(name)}</span><span class="htrack love"><i style="width:${(p / maxA) * 100}%"></i></span><span class="hn">${fmt(p)}</span></div>`).join('')}</div></div>`;
     }
 
     // Recommendation scoreboard
@@ -889,7 +1001,7 @@
     bookDlg.close();
     setTimeout(() => openBookDialog(target), 120);
   });
-  function openBookDialog(book, presetStatus) {
+  function openBookDialog(book, presetStatus, prefill = null) {
     editing = book || null;
     picked = {};
     form.reset();
@@ -914,6 +1026,12 @@
     F.series.value = b.series || '';
     F.seriesNo.value = b.seriesNo || '';
     F.seriesTotal.value = b.seriesTotal || '';
+    if (prefill) {
+      if (prefill.author) F.author.value = prefill.author;
+      if (prefill.series) { F.series.value = prefill.series; F.seriesNo.value = prefill.seriesNo || ''; F.seriesTotal.value = prefill.seriesTotal || ''; }
+      if (prefill.query) { $('#lookup-q').value = prefill.query; setTimeout(() => lookup(prefill.query), 50); }
+    }
+
     fRating.set(b.rating || 0);
     fSpice.set(b.spice || 0);
     fTags.set(b.tags);
@@ -977,7 +1095,7 @@
     const data = collectData();
     if (!data) { setAutosave('notitle'); return; }
     Object.assign(editing, data);
-    if (editStart && editStart.status === 'tbr' && data.status === 'read') editing.fromTbr = true;
+    if (editStart && editStart.status === 'tbr' && data.status === 'read') { editing.fromTbr = true; editing.finishedAt ||= Date.now(); }
     save();
     setAutosave('saved');
   }
@@ -1010,7 +1128,7 @@
     const data = collectData();
     if (!data) { F.title.focus(); toast('Add a title first'); return; }
     const before = earnedBadges();
-    const book = { id: uid(), addedAt: Date.now(), ...data };
+    const book = { id: uid(), addedAt: Date.now(), ...data, ...(data.status === 'read' ? { finishedAt: Date.now() } : {}) };
     state.books.push(book);
     save();
     bookDlg.close();
@@ -1053,12 +1171,19 @@
     const isIsbn = /^[\d\-xX ]{10,17}$/.test(q);
     const params = new URLSearchParams({ [isIsbn ? 'isbn' : 'q']: q.replace(/[- ]/g, isIsbn ? '' : ' '), limit: '8', fields: 'key,title,author_name,first_publish_year,number_of_pages_median,cover_i,isbn' });
     try {
-      const res = await fetch(`https://openlibrary.org/search.json?${params}`, { signal: lookupCtrl.signal });
-      const json = await res.json();
-      const docs = json.docs || [];
+      const signal = lookupCtrl.signal;
+      const [olDocs, appleDocs] = await Promise.all([
+        fetch(`https://openlibrary.org/search.json?${params}`, { signal }).then((r) => r.json()).then((j) => j.docs || []).catch((e) => { if (e.name === 'AbortError') throw e; return []; }),
+        isIsbn ? [] : fetch(`https://itunes.apple.com/search?${new URLSearchParams({ term: q, media: 'ebook', limit: '10', country: 'us' })}`, { signal })
+          .then((r) => r.json()).then((j) => (j.results || []).map((r) => ({ title: r.trackName, author_name: [r.artistName], first_publish_year: (r.releaseDate || '').slice(0, 4), coverUrl: (r.artworkUrl100 || '').replace('100x100bb', '600x600bb') })))
+          .catch((e) => { if (e.name === 'AbortError') throw e; return []; }),
+      ]);
+      // Open Library first (it knows page counts), then Apple titles it didn't have
+      const seenTitles = new Set(olDocs.map((d) => norm(d.title)));
+      const docs = [...olDocs.slice(0, 6), ...appleDocs.filter((d) => d.title && !seenTitles.has(norm(d.title)))].slice(0, 10);
       if (!docs.length) { out.innerHTML = `<div class="lookup-status">No matches — just type the details below.</div>`; return; }
       out.innerHTML = docs.map((d, i) => {
-        const fake = { title: d.title, coverUrl: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-S.jpg` : '' };
+        const fake = { title: d.title, coverUrl: d.coverUrl || (d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-S.jpg` : '') };
         return `<button type="button" class="result" data-i="${i}">${coverHTML(fake)}<div><strong>${esc(d.title)}</strong><span>${esc((d.author_name || []).slice(0, 2).join(', '))}${d.first_publish_year ? ' · ' + d.first_publish_year : ''}${d.number_of_pages_median ? ' · ' + d.number_of_pages_median + ' pp' : ''}</span></div></button>`;
       }).join('');
       $$('.result', out).forEach((btn) => btn.addEventListener('click', () => fillFromLookup(docs[+btn.dataset.i])));
@@ -1170,7 +1295,7 @@
     F.title.value = d.title || '';
     F.author.value = (d.author_name || []).slice(0, 2).join(', ');
     F.pages.value = d.number_of_pages_median || '';
-    F.coverUrl.value = d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '';
+    F.coverUrl.value = d.coverUrl || (d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : '');
     const isbns = d.isbn || [];
     F.isbn.value = isbns.find((x) => x.length === 13 && x.startsWith('978')) || isbns[0] || '';
     $('#lookup-results').innerHTML = '';
@@ -1209,7 +1334,7 @@
     const before = earnedBadges();
     const date = finForm.dateFinished.value || today();
     Object.assign(b, {
-      status: 'read', fromTbr: true,
+      status: 'read', fromTbr: true, finishedAt: Date.now(),
       format: segValue(finFormat),
       dateFinished: date, year: +date.slice(0, 4),
       rating: finRating.value || 0,
@@ -1258,6 +1383,35 @@
   $('#random-btn').addEventListener('click', openPick);
   $('#pick-again').addEventListener('click', () => { pickDlg.close(); openPick(); });
 
+  // ---------- Milestones ----------
+  const MILESTONES = [
+    ['logs', [10, 25, 50, 75, 100, 150, 200, 250, 300, 400, 500], (n) => `${n} books logged!`, '📚'],
+    ['pages', [5000, 10000, 25000, 50000, 75000, 100000, 150000, 200000], (n) => `${fmt(n)} pages read!`, '📄'],
+    ['series', [1, 5, 10, 15, 20, 25, 30, 40, 50], (n) => `${n} series finished!`, '✅'],
+    ['authors', [10, 25, 50, 75, 100], (n) => `${n} different authors!`, '✍️'],
+    ['hours', [100, 250, 500, 750, 1000, 1500, 2000], (n) => `${fmt(n)} hours of stories!`, '⏳'],
+  ];
+  function milestoneMetrics() {
+    const r = readBooks();
+    return { logs: r.length, pages: r.reduce((n, b) => n + num(b.pages), 0), series: seriesProgress().filter((x) => x.complete).length,
+      authors: new Set(r.map((b) => b.author).filter(Boolean)).size, hours: r.reduce((n, b) => n + minutesFor(b), 0) / 60 };
+  }
+  function reachedMilestones() {
+    const m = milestoneMetrics(), out = [];
+    for (const [k, steps, label, e] of MILESTONES) for (const n of steps) if (m[k] >= n) out.push({ id: `${k}-${n}`, text: label(n), e });
+    return out;
+  }
+  function initMilestones() {
+    // Don't throw a parade for milestones you'd already passed before this feature existed
+    if (!state.settings.milestonesSeen) { state.settings.milestonesSeen = reachedMilestones().map((x) => x.id); save(true); }
+  }
+  function newMilestones() {
+    const seen = new Set(state.settings.milestonesSeen || []);
+    const fresh = reachedMilestones().filter((x) => !seen.has(x.id));
+    if (fresh.length) { state.settings.milestonesSeen = [...seen, ...fresh.map((x) => x.id)]; save(true); }
+    return fresh;
+  }
+
   // ---------- Celebration ----------
   const CHEERS = [
     ['Another one for the shelf!', 'Look at you go 📚'],
@@ -1284,10 +1438,21 @@
       line = goal && yearCount === goal ? `You hit your ${thisYear()} goal of ${goal}! 🎯` : `Book #${yearCount} of ${thisYear()}${goal && yearCount < goal ? ` — ${goal - yearCount} to go` : ''}.`;
     }
     $('#celebrate-sub').textContent = `${line} ${sub}`;
-    $('#celebrate-badges').innerHTML = badges.map((b) => `<span>${b.e} ${esc(b.t)} unlocked!</span>`).join('');
+    const ms = newMilestones();
+    const card = $('.celebrate-card');
+    card.classList.toggle('milestone', ms.length > 0);
+    if (ms.length) {
+      const top = ms[ms.length - 1];
+      $('#celebrate-title').textContent = `🏆 ${top.text}`;
+      $('#celebrate-sub').textContent = `Milestone unlocked with “${book.title}”. ${sub}`;
+    }
+    $('#celebrate-badges').innerHTML = ms.map((m) => `<span class="ms-chip">${m.e} ${esc(m.text)}</span>`).join('') + badges.map((b) => `<span>${b.e} ${esc(b.t)} unlocked!</span>`).join('');
+    const u = book.series ? seriesUpNext().find((x) => x.name === book.series && !x.onTbr) : null;
+    $('#celebrate-next').innerHTML = u ? `<button type="button" class="btn" data-upnext="${esc(u.name)}">⏭️ Add book ${u.next} of ${esc(u.name)} to TBR</button>` : '';
     el.hidden = false;
-    if (navigator.vibrate) navigator.vibrate([15, 60, 25, 60, 40]);
-    confetti(badges.length ? 260 : 160);
+    if (navigator.vibrate) navigator.vibrate(ms.length ? [20, 50, 20, 50, 20, 50, 80] : [15, 60, 25, 60, 40]);
+    confetti(ms.length ? 340 : badges.length ? 260 : 160);
+    applyCoverTheme();
     $('#celebrate-close').focus({ preventScroll: true });
   }
   function closeCelebrate() { $('#celebrate').hidden = true; stopConfetti(); }
@@ -1363,6 +1528,7 @@
   $('#settings-btn').addEventListener('click', () => {
     setForm.goal.value = state.settings.goal;
     setForm.minPerPage.value = state.settings.minPerPage;
+    setForm.coverTheme.checked = state.settings.coverTheme !== false;
     $('#install-hint').textContent = installHint();
     setSyncStatus(sync.status || (sync.token ? 'synced' : 'idle'));
     const lb = state.settings.lastBackup;
@@ -1373,6 +1539,8 @@
     e.preventDefault();
     state.settings.goal = Math.round(num(setForm.goal.value));
     state.settings.minPerPage = num(setForm.minPerPage.value) || 1.5;
+    state.settings.coverTheme = setForm.coverTheme.checked;
+    applyCoverTheme();
     save(); setDlg.close(); render();
   });
   $('#export-btn').addEventListener('click', () => {
@@ -1691,9 +1859,34 @@
     setTimeout(() => toast('Tip: export a backup in Settings 💾', 'Open', () => $('#settings-btn').click()), 1500);
   }
 
+  // ---------- Siri / Shortcuts: open Booklog with ?log=Title (finished it) or ?add=Title (TBR) ----------
+  function handleUrlActions() {
+    const p = new URLSearchParams(location.search);
+    const log = p.get('log'), add = p.get('add');
+    if (log === null && add === null) return;
+    history.replaceState(null, '', location.pathname);
+    const q = (log ?? add).trim();
+    if (log !== null && q) {
+      const n = norm(q);
+      const tbr = tbrBooks();
+      const match = tbr.find((b) => norm(b.title) === n) || (n.length >= 4 && tbr.find((b) => norm(b.title).includes(n) || n.includes(norm(b.title))));
+      if (match) {
+        setTab('tbr');
+        openFinish(match.id, document.querySelector(`[data-finish="${match.id}"]`) || document.createElement('span'));
+        return;
+      }
+    }
+    openBookDialog(null, log !== null ? 'read' : 'tbr', q ? { query: q } : null);
+  }
+  $('#siri-copy').addEventListener('click', async () => {
+    const link = `${location.origin}${location.pathname}?log=`;
+    try { await navigator.clipboard.writeText(link); toast('Link copied — paste it into your Shortcut 📋'); }
+    catch (_) { prompt('Copy this link:', link); }
+  });
+
   // ---------- Boot ----------
   setTab(ui.tab);
-  loadPublishedOnFirstVisit().finally(startSync);
+  loadPublishedOnFirstVisit().finally(() => { startSync(); initMilestones(); handleUrlActions(); applyCoverTheme(); });
   maybeNudgeBackup();
   if (state.books.some((b) => !b.coverUrl && !b.isbn && !b.coverTried)) setTimeout(fillMissingCovers, 2000);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

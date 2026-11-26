@@ -24,7 +24,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <header class="topbar">
@@ -234,6 +234,7 @@
       </div>
       <label>Yearly reading goal (books) <input type="number" name="goal" min="0" inputmode="numeric" /></label>
       <label>Reading speed (minutes per page) <input type="number" name="minPerPage" min="0.2" step="0.1" inputmode="decimal" /></label>
+      <label class="toggle-row"><input type="checkbox" name="coverTheme" /><span><b>🎨 Match colors to my latest book</b><small id="theme-from">The app's accent color follows your most recent cover</small></span></label>
       <p class="hint">Used to estimate time for books you read with your eyes. Audiobooks use the length you enter (or ~2 min/page if blank).</p>
 
       <div class="field-label">Backup</div>
@@ -261,6 +262,10 @@
       </div>
       <div class="btn-row"><button type="button" class="btn" id="sync-btn">🔄 Get latest books from the website</button></div>
       <p class="hint" id="last-backup"></p>
+
+      <div class="field-label">Log a book with Siri 🎙️</div>
+      <p class="hint">Make an iPhone Shortcut so you can say “Hey Siri, log a book”. Steps are in the README. You'll need this link:</p>
+      <div class="btn-row"><button type="button" class="btn" id="siri-copy">📋 Copy Siri link</button></div>
 
       <div class="field-label">Add to your phone</div>
       <p class="hint" id="install-hint"></p>
@@ -314,12 +319,13 @@
       <h2 id="celebrate-title">Another one for the shelf!</h2>
       <p id="celebrate-sub"></p>
       <div class="new-badges" id="celebrate-badges"></div>
+      <div class="celebrate-next" id="celebrate-next"></div>
       <button class="btn primary" id="celebrate-close">Yay! 📚</button>
     </div>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
