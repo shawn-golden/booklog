@@ -324,6 +324,7 @@
       author: (a, b) => cmpStr(authorLast(a.author), authorLast(b.author)) || cmpStr(sortTitle(a.title), sortTitle(b.title)),
       added: (a, b) => (b.addedAt || 0) - (a.addedAt || 0),
       rating: (a, b) => (b.rating || 0) - (a.rating || 0) || cmpStr(sortTitle(a.title), sortTitle(b.title)),
+      series: (a, b) => (!a.series - !b.series) || cmpStr(sortTitle(a.series), sortTitle(b.series)) || (+a.seriesNo || 0) - (+b.seriesNo || 0) || cmpStr(sortTitle(a.title), sortTitle(b.title)),
       year: (a, b) => (bookYear(b) || 0) - (bookYear(a) || 0) || cmpStr(b.dateFinished, a.dateFinished) || (b.addedAt || 0) - (a.addedAt || 0),
     };
     return [...list].sort(by[mode] || by.title);
@@ -363,6 +364,7 @@
     const reads = logs.filter((x) => x.format !== 'listen').length, listens = logs.length - reads;
     const how = reads && listens ? '📖🎧 Read & listened' : listens ? '🎧 Listened' : '📖 Read';
     const meta = [
+      ui.readSort === 'series' && g.seriesNo ? `#${g.seriesNo}` : '',
       how,
       g.dateFinished ? fmtDate(g.dateFinished) : (g.year ? String(g.year) : ''),
       g.pages ? `${fmt(g.pages)} pp` : (g.audioMinutes ? fmtDuration(g.audioMinutes) : ''),
@@ -425,7 +427,25 @@
       return;
     }
     if (!list.length) { el.innerHTML = `<div class="empty"><div class="big">🔎</div><p>No books match.</p></div>`; return; }
-    if (ui.readSort === 'year') {
+    if (ui.readSort === 'series') {
+      const prog = new Map(seriesProgress().map((x) => [x.name, x]));
+      let html = '', cur = null;
+      const standalones = list.filter((g) => !g.series).length;
+      for (const g of list) {
+        const key = g.series || '';
+        if (key !== cur) {
+          cur = key;
+          if (key) {
+            const p = prog.get(key);
+            html += `<h2 class="group-head series-head">${esc(key)} <small>${p ? `${p.complete ? '✓ ' : ''}${p.done}/${p.total}` : ''}${g.author ? ` · ${esc(g.author)}` : ''}</small></h2>`;
+          } else {
+            html += `<h2 class="group-head series-head">Standalones <small>${standalones} book${standalones === 1 ? '' : 's'}</small></h2>`;
+          }
+        }
+        html += readCard(g);
+      }
+      el.innerHTML = html;
+    } else if (ui.readSort === 'year') {
       let html = '', cur;
       const counts = {}, logCounts = {};
       list.forEach((g) => { const y = bookYear(g) || 'Unknown'; counts[y] = (counts[y] || 0) + 1; logCounts[y] = (logCounts[y] || 0) + g.logs.length; });
