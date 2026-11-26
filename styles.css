@@ -523,6 +523,21 @@ details.more[open] { display: grid; gap: 10px; }
   .reread-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 
+/* ---------- Autosave status ---------- */
+.save-pill {
+  margin-left: auto; margin-right: 4px;
+  font-size: 13px; font-weight: 700; color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  padding: 5px 10px; border-radius: 999px;
+  opacity: 0; transform: translateY(-4px); transition: opacity .25s ease, transform .25s ease; pointer-events: none;
+}
+.save-pill.show { opacity: 1; transform: none; }
+.sheet-title { display: grid; gap: 2px; }
+.autosave { font-size: 13px; font-weight: 600; color: var(--ink-2); transition: color .2s ease; }
+.autosave[data-state="saving"] { color: var(--ink-2); }
+.autosave[data-state="saved"] { color: var(--green); }
+.autosave[data-state="notitle"] { color: #c0392b; }
+
 /* ---------- Larger screens (enhancements only) ---------- */
 @media (min-width: 600px) {
   main { padding-left: 24px; padding-right: 24px; }

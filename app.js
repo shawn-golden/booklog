@@ -17,9 +17,20 @@
     return { books: [], settings: { ...DEFAULT_SETTINGS }, ui: {} };
   }
   let state = load();
-  function save() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-    catch (e) { toast('Could not save — storage may be full or blocked.'); }
+  let pillTimer;
+  function save(quiet = false) {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      if (!quiet) showSavedPill();
+    } catch (e) { toast('Could not save — storage may be full or blocked.'); }
+  }
+  function showSavedPill(text = '✓ Saved') {
+    const p = document.getElementById('save-pill');
+    if (!p) return;
+    p.textContent = text;
+    p.classList.add('show');
+    clearTimeout(pillTimer);
+    pillTimer = setTimeout(() => p.classList.remove('show'), 1600);
   }
   // Ask the browser not to evict our data (helps on iOS/Android).
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -145,7 +156,7 @@
 
   // ---------- UI state ----------
   const ui = Object.assign({ tab: 'read', readSort: 'year', readFormat: 'all', tbrSort: 'title', statsYear: null }, state.ui);
-  function saveUi() { state.ui = ui; save(); }
+  function saveUi() { state.ui = ui; save(true); }
   const openBuy = new Set();
 
   // ---------- Tabs ----------
@@ -799,7 +810,7 @@
     $('#read-fields').hidden = !isRead;
     $('#priority-field').hidden = isRead;
     $('#audio-field').hidden = !(isRead && segValue(fFormat) === 'listen');
-    $('#save-book').textContent = editing ? 'Save' : isRead ? 'Add to Read 🎉' : 'Add to TBR';
+    $('#save-book').textContent = editing ? 'Done' : isRead ? 'Add to Read 🎉' : 'Add to TBR';
   }
   bindSeg(fStatus, syncFormVisibility);
   bindSeg(fFormat, syncFormVisibility);
@@ -840,18 +851,21 @@
     fTags.set(b.tags);
     syncFormVisibility();
     updateCoverPreview();
+    editStart = book ? { status: book.status, badges: earnedBadges() } : null;
+    clearTimeout(autosaveTimer); autosaveTimer = null;
+    autosaveEl.hidden = !book;
+    if (book) setAutosave('idle');
+    $('#book-cancel').hidden = !!book;
     bookDlg.showModal();
     // Focus search on desktop only (on phones the keyboard popping up is jarring).
     if (!book && window.matchMedia('(hover: hover)').matches) setTimeout(() => $('#lookup-q').focus(), 50);
   }
   $('#add-btn').addEventListener('click', () => openBookDialog(null));
 
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
+  function collectData() {
     const title = F.title.value.trim();
-    if (!title) { F.title.focus(); toast('Add a title first'); return; }
+    if (!title) return null;
     const status = segValue(fStatus);
-    const wasTbr = editing && editing.status === 'tbr';
     const audioMinutes = Math.round(num(F.audioH.value) * 60 + num(F.audioM.value));
     const date = F.dateFinished.value;
     const data = {
@@ -878,31 +892,74 @@
         audioMinutes: segValue(fFormat) === 'listen' ? audioMinutes : 0,
       });
     }
+    return data;
+  }
+
+  // Autosave: when editing an existing book, every change saves on its own.
+  let autosaveTimer = null, editStart = null;
+  const autosaveEl = $('#autosave-status');
+  function setAutosave(st) {
+    autosaveEl.dataset.state = st;
+    autosaveEl.textContent = { idle: 'Changes save automatically', saving: 'Saving…', saved: '✓ Saved', notitle: '⚠️ Add a title to save' }[st];
+  }
+  function autosaveNow() {
+    clearTimeout(autosaveTimer); autosaveTimer = null;
+    if (!editing) return;
+    const data = collectData();
+    if (!data) { setAutosave('notitle'); return; }
+    Object.assign(editing, data);
+    if (editStart && editStart.status === 'tbr' && data.status === 'read') editing.fromTbr = true;
+    save();
+    setAutosave('saved');
+  }
+  function scheduleAutosave() {
+    if (!editing) return;
+    setAutosave('saving');
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(autosaveNow, 500);
+  }
+  form.addEventListener('input', scheduleAutosave);
+  form.addEventListener('change', scheduleAutosave);
+  // Taps on toggles, stars, peppers and trope chips don't fire input events
+  form.addEventListener('click', (e) => { if (e.target.closest('[data-value],[data-n],[data-tag]')) scheduleAutosave(); });
+
+  bookDlg.addEventListener('close', () => {
+    if (!editing) return;
+    if (autosaveTimer) autosaveNow();
+    const book = editing, start = editStart;
+    editing = null; editStart = null;
+    if (!book.coverUrl && !book.isbn) autoCover(book);
+    if (start && start.status === 'tbr' && book.status === 'read') {
+      celebrate(book, newBadges(start.badges));
+      if (ui.tab !== 'read') setTab('read'); else render();
+    } else render();
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (editing) { bookDlg.close(); return; } // "Done": changes are already saved
+    const data = collectData();
+    if (!data) { F.title.focus(); toast('Add a title first'); return; }
     const before = earnedBadges();
-    let book;
-    if (editing) {
-      Object.assign(editing, data);
-      if (wasTbr && status === 'read') editing.fromTbr = true;
-      book = editing;
-    } else {
-      book = { id: uid(), addedAt: Date.now(), ...data };
-      state.books.push(book);
-    }
+    const book = { id: uid(), addedAt: Date.now(), ...data };
+    state.books.push(book);
     save();
     bookDlg.close();
     if (!book.coverUrl && !book.isbn) autoCover(book);
-    if (status === 'read' && (!editing || wasTbr)) {
+    if (data.status === 'read') {
       celebrate(book, newBadges(before));
       if (ui.tab !== 'read') setTab('read'); else render();
     } else {
       render();
-      if (!editing) toast(`Added “${book.title}” to your TBR 🔖`);
+      toast(`Added “${book.title}” to your TBR 🔖`);
     }
   });
 
   $('#delete-book').addEventListener('click', () => {
     if (!editing) return;
     const book = editing, idx = state.books.indexOf(book);
+    clearTimeout(autosaveTimer); autosaveTimer = null;
+    editing = null; editStart = null;
     state.books.splice(idx, 1);
     save(); bookDlg.close(); render();
     toast(`Deleted “${book.title}”`, 'Undo', () => { state.books.splice(idx, 0, book); save(); render(); });
