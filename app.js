@@ -59,6 +59,25 @@
   // Ask the browser not to evict our data (helps on iOS/Android).
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
+  // ---------- Haptics ----------
+  // iOS Safari has no vibrate API, but toggling a native switch control gives a light haptic tick (iOS 18+).
+  let hapticLabel = null;
+  function haptic(kind = 'light') {
+    try {
+      if (navigator.vibrate) { navigator.vibrate(kind === 'success' ? [12, 40, 20] : kind === 'heavy' ? 25 : 8); return; }
+      if (!hapticLabel) {
+        hapticLabel = document.createElement('label');
+        hapticLabel.setAttribute('aria-hidden', 'true');
+        hapticLabel.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none';
+        const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.tabIndex = -1;
+        hapticLabel.appendChild(i); document.body.appendChild(hapticLabel);
+      }
+      hapticLabel.click();
+      if (kind === 'success') { setTimeout(() => hapticLabel.click(), 110); setTimeout(() => hapticLabel.click(), 240); }
+      if (kind === 'heavy') setTimeout(() => hapticLabel.click(), 60);
+    } catch (_) {}
+  }
+
   // ---------- Helpers ----------
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -110,6 +129,31 @@
     if (!src) return placeholderHTML(b);
     return `<div class="cover" data-ph="${esc(b.title || '?')}"><img src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`;
   }
+  // Covers shimmer until their image arrives, then fade in.
+  document.addEventListener('load', (e) => { if (e.target.tagName === 'IMG') e.target.closest('.cover')?.classList.add('loaded'); }, true);
+  function markLoaded(rootEl = document) {
+    rootEl.querySelectorAll('.cover:not(.loaded) img').forEach((img) => { if (img.complete && img.naturalWidth) img.closest('.cover').classList.add('loaded'); });
+  }
+  new MutationObserver(() => markLoaded()).observe(document.body, { childList: true, subtree: true });
+  // Cards cascade in, numbers count up
+  function stagger(el) {
+    if (!el) return;
+    [...el.children].slice(0, 16).forEach((c, i) => c.style.setProperty('--i', i));
+  }
+  function countUp(rootEl) {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    rootEl.querySelectorAll('[data-count]').forEach((el) => {
+      const target = parseFloat(el.dataset.count), suffix = el.dataset.suffix || '', dec = +(el.dataset.dec || 0);
+      const t0 = performance.now(), dur = 900;
+      const step = (t) => {
+        const p = Math.min(1, (t - t0) / dur), v = target * (1 - Math.pow(1 - p, 3));
+        el.textContent = (dec ? v.toFixed(dec) : fmt(v)) + suffix;
+        if (p < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
   // If a cover fails to load, swap in a colored placeholder.
   document.addEventListener('error', (e) => {
     const img = e.target;
@@ -165,6 +209,20 @@
       img.src = url + (url.includes('?') ? '&' : '?') + 'bl-color=1';
     });
   }
+  let colorsRunning = false;
+  async function ensureColors(books, onDone) {
+    const todo = books.filter((b) => coverSrc(b) && !(coverSrc(b) in colorCache));
+    if (!todo.length || colorsRunning) return false;
+    colorsRunning = true;
+    const queue = [...todo];
+    await Promise.all(Array.from({ length: 4 }, async () => { while (queue.length) await coverColor(coverSrc(queue.shift())); }));
+    colorsRunning = false;
+    onDone && onDone();
+    return true;
+  }
+  const hueOf = (b) => { const c = colorCache[coverSrc(b)]; return c ? c.h : 999; };
+  function byColor(books) { return [...books].sort((x, y) => hueOf(x) - hueOf(y)); }
+
   async function applyCoverTheme() {
     const rootEl = document.documentElement;
     const b = state.settings.coverTheme === false ? null : latestRead();
@@ -276,7 +334,8 @@
       const n = +b.dataset.n;
       el.value = el.value === n ? 0 : n; // tap again to clear
       paint();
-      if (navigator.vibrate) navigator.vibrate(8);
+      if (el.value) { b.classList.remove('bounce'); void b.offsetWidth; b.classList.add('bounce'); if (char === '★') sparkle(b); }
+      haptic();
     });
     el.set = (v) => { el.value = v || 0; paint(); };
   }
@@ -297,7 +356,8 @@
       const tg = b.dataset.tag;
       el.value.has(tg) ? el.value.delete(tg) : el.value.add(tg);
       b.setAttribute('aria-pressed', String(el.value.has(tg)));
-      if (navigator.vibrate) navigator.vibrate(5);
+      b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
+      haptic();
     });
     el.addEventListener('keydown', (e) => {
       if (!e.target.classList.contains('tag-add') || e.key !== 'Enter') return;
@@ -647,13 +707,13 @@
     const hours = mins / 60;
 
     let html = `<div class="tiles">
-      <div class="tile"><div class="k">Books</div><div class="v">${sel.length}</div><div class="s">${reads} read · ${listens} listened</div></div>
-      <div class="tile"><div class="k">Pages</div><div class="v">${fmt(allPages)}</div><div class="s">${fmt(pages)} read with eyes</div></div>
+      <div class="tile"><div class="k">Books</div><div class="v" data-count="${sel.length}">${sel.length}</div><div class="s">${reads} read · ${listens} listened</div></div>
+      <div class="tile"><div class="k">Pages</div><div class="v" data-count="${allPages}">${fmt(allPages)}</div><div class="s">${fmt(pages)} read with eyes</div></div>
       <div class="tile"><div class="k">Time</div><div class="v">${hours >= 10 ? fmt(hours) : hours.toFixed(1)}h</div><div class="s">≈ ${(hours / 24).toFixed(1)} days, est.</div></div>
       <div class="tile"><div class="k">Avg rating</div><div class="v">${avgRating ? avgRating.toFixed(1) : '–'}</div><div class="s">${avgRating ? `<span class="stars">${starStr(Math.round(avgRating))}</span>` : 'Rate books to see'}</div></div>
     </div>`;
 
-    if (sel.length) html += `<button type="button" class="wrapped-btn" id="wrapped-btn">🎁 ${ui.statsYear === 'all' ? 'My reading, wrapped' : `My ${ui.statsYear}, wrapped`}<span>Make a shareable card →</span></button>`;
+    if (sel.length) html += `<button type="button" class="wrapped-btn" id="wrapped-btn">🎁 ${ui.statsYear === 'all' ? 'My reading, wrapped' : `My ${ui.statsYear}, wrapped`}<span>Watch your story →</span></button>`;
 
     if (ui.statsYear !== 'all' && state.settings.goal) {
       const g = state.settings.goal, pct = Math.min(100, Math.round((sel.length / g) * 100));
@@ -713,18 +773,27 @@
 
     html += moreStats(sel);
 
+    // Year in covers: every cover, sorted into a rainbow
+    if (sel.length) {
+      const uniq = groupReads(sel).filter((g) => coverSrc(g));
+      const missing = uniq.some((g) => !(coverSrc(g) in colorCache));
+      if (missing) ensureColors(uniq, () => { if (ui.tab === 'stats') renderStats(); });
+      const sorted = byColor(uniq);
+      const strip = sorted.filter((g) => colorCache[coverSrc(g)]).map((g) => { const c = colorCache[coverSrc(g)]; return `hsl(${c.h} ${Math.round(c.s * 80)}% 50%)`; });
+      html += `<div class="panel"><h3>${ui.statsYear === 'all' ? 'Your books' : ui.statsYear} in covers 🎨</h3>
+        ${strip.length > 2 ? `<div class="color-strip" style="background:linear-gradient(90deg, ${strip.join(', ')})"></div>` : ''}
+        <div class="mosaic">${sorted.map((g) => `<button class="card-main" data-edit="${g.id}" aria-label="${esc(g.title)}">${coverHTML(g)}</button>`).join('')}</div>
+        ${missing ? '<p class="hint" style="margin-top:8px">Sorting by color…</p>' : ''}</div>`;
+    }
+
     // Badges (always all-time)
     const earned = new Set(earnedBadges());
     html += `<div class="panel"><h3>Badges · ${earned.size}/${BADGES.length}</h3><div class="badges">${BADGES.map((b) =>
       `<div class="badge ${earned.has(b.id) ? '' : 'locked'}" title="${esc(b.d)}"><div class="e">${b.e}</div><div class="t">${b.t}</div><div class="d">${b.d}</div></div>`).join('')}</div></div>`;
 
-    // Cover wall
-    if (sel.length) {
-      const wall = sortBooks(groupReads(sel), 'year');
-      html += `<div class="panel"><h3>Cover wall</h3><div class="wall">${wall.map((b) => `<button class="card-main" style="display:block" data-edit="${b.id}" aria-label="${esc(b.title)}">${coverHTML(b)}</button>`).join('')}</div></div>`;
-    }
     body.innerHTML = html;
-    $('#wrapped-btn')?.addEventListener('click', () => makeWrapped(sel));
+    countUp(body);
+    $('#wrapped-btn')?.addEventListener('click', () => openStories(sel));
   }
 
   // ---------- More stats (no extra input needed) ----------
@@ -921,65 +990,219 @@
     return html;
   }
 
-  // ---------- Wrapped: a shareable summary image ----------
-  let wrappedBlob = null;
-  async function makeWrapped(sel) {
-    const W = 1080, H = 1920, c = document.createElement('canvas');
-    c.width = W; c.height = H;
-    const x = c.getContext('2d');
-    try { await document.fonts.load('700 80px Fraunces'); } catch (_) {}
-    const serif = 'Fraunces, Georgia, serif', sans = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    const g = x.createLinearGradient(0, 0, W, H);
-    g.addColorStop(0, '#2b1a14'); g.addColorStop(0.55, '#7a2f22'); g.addColorStop(1, '#c4553a');
-    x.fillStyle = g; x.fillRect(0, 0, W, H);
-    // sparkle dots
-    x.fillStyle = 'rgba(255,255,255,.08)';
-    for (let i = 0; i < 60; i++) { x.beginPath(); x.arc((i * 197) % W, (i * 331) % H, (i % 4) + 2, 0, 7); x.fill(); }
-
-    const label = ui.statsYear === 'all' ? 'All time' : String(ui.statsYear);
+  function readerArchetype(sel) {
+    const n = sel.length || 1, uniq = groupReads(sel).length;
+    const seriesShare = sel.filter((b) => b.series).length / n;
+    const listenShare = sel.filter((b) => b.format === 'listen').length / n;
+    const brickShare = sel.filter((b) => num(b.pages) >= 600).length / n;
+    const rereads = sel.length - uniq, rereadShare = rereads / n;
+    const noun = seriesShare >= 0.6 ? 'Saga Devourer' : brickShare >= 0.4 ? 'Brick Collector' : listenShare >= 0.5 ? 'Audio Adventurer' : 'Story Wanderer';
+    const adj = rereadShare >= 0.1 ? 'Loyal' : listenShare >= 0.2 && listenShare < 0.5 ? 'Ears-and-Eyes' : brickShare >= 0.3 ? 'Fearless' : 'Curious';
+    const lines = [`${Math.round(seriesShare * 100)}% of your reads were part of a series`];
+    if (listenShare) lines.push(`${Math.round(listenShare * 100)}% you listened to`);
+    if (rereads) lines.push(`you went back to ${rereads} favorite${rereads === 1 ? '' : 's'}`);
+    if (brickShare) lines.push(`${Math.round(brickShare * 100)}% were 600+ page bricks`);
+    return { title: `The ${adj} ${noun}`, lines };
+  }
+  function wrappedData(sel) {
     const listens = sel.filter((b) => b.format === 'listen').length;
     const pages = sel.reduce((n, b) => n + num(b.pages), 0);
     const hours = sel.reduce((n, b) => n + minutesFor(b), 0) / 60;
-    const byAuthor = {}; sel.forEach((b) => { if (b.author) byAuthor[b.author] = (byAuthor[b.author] || 0) + 1; });
-    const topAuthor = Object.entries(byAuthor).sort((a, b) => b[1] - a[1])[0];
-    const longest = [...sel].sort((a, b) => num(b.pages) - num(a.pages))[0];
-    const finished = seriesProgress().filter((s) => s.complete).length;
-    const tagCount = {}; sel.forEach((b) => (b.tags || []).forEach((tg) => (tagCount[tg] = (tagCount[tg] || 0) + 1)));
-    const topTrope = Object.entries(tagCount).sort((a, b) => b[1] - a[1])[0];
-    const spiced = sel.filter((b) => b.spice);
-    const avgSpice = spiced.length ? spiced.reduce((n, b) => n + b.spice, 0) / spiced.length : 0;
+    const byAuthor = {};
+    sel.forEach((b) => { if (b.author) (byAuthor[b.author] ||= []).push(b); });
+    const [topAuthor, topList] = Object.entries(byAuthor).sort((x, y) => y[1].length - x[1].length)[0] || [];
+    const authorPages = (topList || []).reduce((n, b) => n + num(b.pages), 0);
+    const saga = seriesProgress().map((x) => ({ ...x, pages: x.books.reduce((n, b) => n + num(b.pages), 0) })).sort((x, y) => y.pages - x.pages)[0];
+    const finished = seriesProgress().filter((x) => x.complete).length;
+    const lbs = pages / 453.6;
+    const covers = byColor(groupReads(sel).filter((g) => coverSrc(g)));
+    return { n: sel.length, listens, reads: sel.length - listens, pages, hours, topAuthor, topList: topList || [], authorPages, saga, finished, lbs, covers, arch: readerArchetype(sel),
+      label: ui.statsYear === 'all' ? 'All time' : String(ui.statsYear) };
+  }
 
-    x.fillStyle = '#fff'; x.textAlign = 'left';
-    x.font = `600 44px ${sans}`; x.globalAlpha = .8; x.fillText('📚 BOOKLOG', 90, 170); x.globalAlpha = 1;
-    x.font = `700 120px ${serif}`; x.fillText(`My ${label}`, 90, 320);
-    x.font = `700 120px ${serif}`; x.fillText('in books', 90, 450);
+  // ---------- Wrapped stories ----------
+  let storyIdx = 0, storyTimer = null, storySel = [];
+  const STORY_MS = 6500;
+  function openStories(sel) {
+    storySel = sel;
+    const d = wrappedData(sel);
+    ensureColors(d.covers.map((g) => g), () => { if (!$('#stories').hidden) buildStories(); });
+    buildStories();
+    $('#stories').hidden = false;
+    document.body.classList.add('no-scroll');
+    haptic();
+    goStory(0);
+  }
+  const FLOAT_SPOTS = [[-4, 6, -12], [56, 3, 9], [76, 24, 14], [-6, 66, -8], [68, 70, 10], [30, 84, -5], [84, 88, 6]];
+  function buildStories() {
+    const d = wrappedData(storySel);
+    const fan = (list) => `<div class="st-fan">${list.slice(0, 3).map((b, i) => `<div class="st-fan-item" style="--k:${i}">${coverHTML(b)}</div>`).join('')}</div>`;
+    const rp = d.n ? Math.round((d.reads / d.n) * 100) : 0;
+    const cards = [
+      `<section class="st-card st-intro">
+        <div class="st-floaters">${d.covers.slice(0, 7).map((b, i) => { const [l, tp, r] = FLOAT_SPOTS[i]; return `<div class="st-float" style="--k:${i};left:${l}%;top:${tp}%;--r:${r}deg">${coverHTML(b)}</div>`; }).join('')}</div>
+        <p class="st-kicker">Booklog Wrapped</p>
+        <h2 class="st-huge">Your<br>${esc(d.label === 'All time' ? 'reading' : d.label)}<br><em>in books</em></h2>
+        <p class="st-hint">Tap to begin →</p></section>`,
+      `<section class="st-card st-count">
+        <p class="st-kicker">You finished</p>
+        <div class="st-mega" data-count="${d.n}">${d.n}</div>
+        <p class="st-big">books</p>
+        <div class="st-pills"><span>📖 ${d.reads} read</span><span>🎧 ${d.listens} listened</span></div></section>`,
+      `<section class="st-card st-pages">
+        <p class="st-kicker">That's</p>
+        <div class="st-mega sm" data-count="${d.pages}">${fmt(d.pages)}</div>
+        <p class="st-big">pages</p>
+        <div class="st-stack">
+          <div><b data-count="${Math.round(d.hours)}">${fmt(d.hours)}</b><span>hours of story</span></div>
+          <div><b data-count="${Math.round(d.lbs)}" data-suffix=" lbs">${fmt(d.lbs)} lbs</b><span>of paper, if printed</span></div>
+        </div></section>`,
+      d.topAuthor ? `<section class="st-card st-author">
+        <p class="st-kicker">You couldn't put down</p>
+        <h2 class="st-name">${esc(d.topAuthor)}</h2>
+        ${fan(groupReads(d.topList))}
+        <p class="st-sub"><b>${d.topList.length}</b> books · <b>${fmt(d.authorPages)}</b> pages</p></section>` : '',
+      d.saga && d.saga.pages ? `<section class="st-card st-saga">
+        <p class="st-kicker">Your biggest saga</p>
+        <h2 class="st-name">${esc(d.saga.name)}</h2>
+        <div class="st-mountain"><span style="--h:${Math.min(100, 30 + d.saga.done * 9)}%"></span></div>
+        <p class="st-sub"><b>${fmt(d.saga.pages)}</b> pages · ${d.saga.complete ? 'all' : d.saga.done} of ${d.saga.total} books${d.saga.complete ? ' ✓' : ''}</p>
+        <p class="st-sub small">${d.finished} series finished in total</p></section>` : '',
+      `<section class="st-card st-format">
+        <p class="st-kicker">Eyes or ears?</p>
+        <div class="st-donut" style="--rp:${rp}"><div><b>${rp}%</b><span>read</span></div></div>
+        <p class="st-sub">📖 ${d.reads} on the page · 🎧 ${d.listens} by ear</p></section>`,
+      d.covers.length ? `<section class="st-card st-colors">
+        <p class="st-kicker">Your year in color</p>
+        <div class="st-mosaic">${d.covers.map((b) => coverHTML(b)).join('')}</div></section>` : '',
+      `<section class="st-card st-arch">
+        <p class="st-kicker">Your reader type</p>
+        <h2 class="st-name">${esc(d.arch.title)}</h2>
+        <ul class="st-lines">${d.arch.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></section>`,
+      `<section class="st-card st-end">
+        <p class="st-kicker">That's a wrap</p>
+        <h2 class="st-huge sm">${d.n} books.<br><em>${esc(d.arch.title.replace(/^The /, ''))}.</em></h2>
+        <div class="st-actions">
+          <button type="button" class="btn primary big" id="st-share">✨ Make my share card</button>
+          <button type="button" class="btn ghost" id="st-replay">↺ Watch again</button>
+        </div></section>`,
+    ].filter(Boolean);
+    $('#st-track').innerHTML = cards.join('');
+    $('#st-bars').innerHTML = cards.map(() => '<i><b></b></i>').join('');
+    $('#st-share').addEventListener('click', (e) => { e.stopPropagation(); makePoster(storySel); });
+    $('#st-replay').addEventListener('click', (e) => { e.stopPropagation(); goStory(0); });
+    goStory(Math.min(storyIdx, cards.length - 1), true);
+  }
+  function goStory(i, silent = false) {
+    const cards = $$('#st-track .st-card'), bars = $$('#st-bars i');
+    if (i < 0) i = 0;
+    if (i >= cards.length) { closeStories(); return; }
+    storyIdx = i;
+    cards.forEach((c, k) => c.classList.toggle('active', k === i));
+    bars.forEach((b, k) => { b.className = k < i ? 'done' : k === i ? 'now' : ''; });
+    if (!silent) { countUp(cards[i]); haptic(); }
+    clearTimeout(storyTimer);
+    if (i < cards.length - 1) storyTimer = setTimeout(() => goStory(storyIdx + 1), STORY_MS);
+  }
+  function closeStories() {
+    clearTimeout(storyTimer);
+    $('#stories').hidden = true;
+    document.body.classList.remove('no-scroll');
+  }
+  $('#stories').addEventListener('click', (e) => {
+    if (e.target.closest('#st-close')) { closeStories(); return; }
+    if (e.target.closest('button')) return;
+    const x = e.clientX / innerWidth;
+    goStory(storyIdx + (x < 0.3 ? -1 : 1));
+  });
+  document.addEventListener('keydown', (e) => {
+    if ($('#stories').hidden) return;
+    if (e.key === 'Escape') closeStories();
+    if (e.key === 'ArrowRight') goStory(storyIdx + 1);
+    if (e.key === 'ArrowLeft') goStory(storyIdx - 1);
+  });
 
-    x.font = `700 300px ${serif}`; x.fillStyle = '#ffd38a'; x.fillText(String(sel.length), 80, 790);
-    x.fillStyle = '#fff'; x.font = `600 56px ${sans}`; x.fillText(`books · ${sel.length - listens} read · ${listens} listened`, 90, 880);
+  // ---------- Wrapped: a shareable summary image ----------
+  let wrappedBlob = null;
+  const loadImg = (url) => new Promise((res) => {
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.onload = () => res(img); img.onerror = () => res(null);
+    img.src = url + (url.includes('?') ? '&' : '?') + 'bl-color=1';
+  });
+  async function makePoster(sel) {
+    const d = wrappedData(sel);
+    const W = 1080, H = 1920, c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    try { await document.fonts.load('700 80px Fraunces'); await document.fonts.load('italic 500 80px Fraunces'); } catch (_) {}
+    const serif = 'Fraunces, Georgia, serif', sans = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    // Mesh-gradient background tinted by your covers
+    x.fillStyle = '#120c09'; x.fillRect(0, 0, W, H);
+    const hues = d.covers.map((b) => colorCache[coverSrc(b)]?.h).filter((h) => h !== undefined);
+    const pick = (k, fb) => hues.length ? hues[Math.floor((k / 4) * hues.length)] : fb;
+    [[200, 300, 700, pick(0, 12)], [900, 700, 650, pick(1, 280)], [300, 1300, 750, pick(2, 40)], [950, 1650, 600, pick(3, 330)]].forEach(([cx, cy, r, h]) => {
+      const g = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, `hsla(${h}, 75%, 50%, .55)`); g.addColorStop(1, 'hsla(0,0%,0%,0)');
+      x.fillStyle = g; x.fillRect(0, 0, W, H);
+    });
+    // grain
+    const grain = x.getImageData(0, 0, W, H), gd = grain.data;
+    for (let i = 0; i < gd.length; i += 4) { const n = (Math.random() - 0.5) * 18; gd[i] += n; gd[i + 1] += n; gd[i + 2] += n; }
+    x.putImageData(grain, 0, 0);
 
-    const rows = [
-      ['📄', `${fmt(pages)} pages`],
-      ['⏳', `~${fmt(hours)} hours of story`],
-      topAuthor && ['✍️', `Top author: ${topAuthor[0]} (${topAuthor[1]})`],
-      longest && num(longest.pages) && ['🧱', `Biggest brick: ${longest.title}`],
-      finished && ['✅', `${finished} series finished`],
-      topTrope && ['💘', `Favorite trope: ${topTrope[0]}`],
-      avgSpice && ['🌶️', `Average spice: ${avgSpice.toFixed(1)} / 5`],
-    ].filter(Boolean).slice(0, 6);
-    let y = 1040;
-    for (const [e, txt] of rows) {
-      x.font = `64px ${sans}`; x.fillText(e, 90, y);
-      x.font = `600 54px ${sans}`;
-      let t = txt; while (x.measureText(t).width > W - 280 && t.length > 4) t = t.slice(0, -2);
-      x.fillText(t === txt ? t : t + '…', 190, y);
-      y += 118;
+    x.fillStyle = '#fff';
+    x.font = `700 34px ${sans}`; x.globalAlpha = 0.75;
+    x.fillText(`BOOKLOG  ·  ${d.label.toUpperCase()} WRAPPED`, 80, 140); x.globalAlpha = 1;
+
+    x.font = `700 400px ${serif}`; x.fillText(String(d.n), 64, 520);
+    x.font = `italic 500 96px ${serif}`; x.fillText('books finished', 80, 640);
+
+    // pills
+    let px = 80;
+    for (const t of [`📖 ${d.reads} read`, `🎧 ${d.listens} listened`]) {
+      x.font = `600 40px ${sans}`;
+      const w = x.measureText(t).width + 56;
+      x.fillStyle = 'rgba(255,255,255,.14)'; x.beginPath(); x.roundRect(px, 690, w, 76, 38); x.fill();
+      x.fillStyle = '#fff'; x.fillText(t, px + 28, 742); px += w + 18;
     }
-    x.globalAlpha = .7; x.font = `500 38px ${sans}`; x.fillText(`${earnedBadges().length} badges earned · made with Booklog`, 90, H - 110); x.globalAlpha = 1;
+
+    // stat boxes (2 x 3)
+    const boxes = [['Pages', fmt(d.pages)], ['Hours', `~${fmt(d.hours)}`], ['Weight', `${fmt(d.lbs)} lbs`],
+      ['Series done', String(d.finished)], ['Top author', d.topAuthor || '–'], ['Biggest saga', d.saga?.name || '–']];
+    boxes.forEach(([k, v], i) => {
+      const bx = 80 + (i % 2) * 470, by = 830 + Math.floor(i / 2) * 190;
+      x.fillStyle = 'rgba(255,255,255,.10)'; x.beginPath(); x.roundRect(bx, by, 450, 170, 28); x.fill();
+      x.fillStyle = 'rgba(255,255,255,.7)'; x.font = `600 30px ${sans}`; x.fillText(k.toUpperCase(), bx + 32, by + 56);
+      x.fillStyle = '#fff';
+      let fs = 60; x.font = `700 ${fs}px ${serif}`;
+      while (x.measureText(v).width > 390 && fs > 32) { fs -= 2; x.font = `700 ${fs}px ${serif}`; } // shrink to fit first
+      let t = v; while (x.measureText(t).width > 390 && t.length > 3) t = t.slice(0, -2);
+      x.fillText(t === v ? t : t + '…', bx + 32, by + 128);
+    });
+
+    // reader type
+    x.fillStyle = 'rgba(255,255,255,.7)'; x.font = `600 30px ${sans}`; x.fillText('READER TYPE', 80, 1450);
+    x.fillStyle = '#fff'; x.font = `italic 600 64px ${serif}`;
+    let at = d.arch.title; while (x.measureText(at).width > W - 160) at = at.slice(0, -2);
+    x.fillText(at, 80, 1530);
+
+    // cover strip
+    const strip = d.covers.slice(0, 7);
+    const imgs = await Promise.all(strip.map((b) => loadImg(coverSrc(b))));
+    const cw = 128, ch = 192;
+    imgs.forEach((img, i) => {
+      const cx = 80 + i * (cw + 14), cy = 1600 + (i % 2) * 14;
+      x.save(); x.translate(cx + cw / 2, cy + ch / 2); x.rotate((i % 2 ? 1 : -1) * 0.03);
+      x.shadowColor = 'rgba(0,0,0,.45)'; x.shadowBlur = 24; x.shadowOffsetY = 10;
+      if (img) x.drawImage(img, -cw / 2, -ch / 2, cw, ch);
+      else { x.fillStyle = PALETTE[i % PALETTE.length]; x.fillRect(-cw / 2, -ch / 2, cw, ch); }
+      x.restore();
+    });
 
     c.toBlob((blob) => {
       wrappedBlob = blob;
       $('#wrapped-img').src = URL.createObjectURL(blob);
-      $('#wrapped-title').textContent = `${label === 'All time' ? 'Your reading' : 'Your ' + label}, wrapped 🎁`;
+      $('#wrapped-title').textContent = 'Your share card ✨';
       const canShare = navigator.canShare && navigator.canShare({ files: [new File([blob], 'x.png', { type: 'image/png' })] });
       $('#wrapped-share').hidden = !canShare;
       $('#wrapped-dialog').showModal();
@@ -1002,9 +1225,10 @@
   });
 
   function render() {
-    if (ui.tab === 'read') renderRead();
-    else if (ui.tab === 'tbr') renderTbr();
+    if (ui.tab === 'read') { renderRead(); stagger($('#read-list')); }
+    else if (ui.tab === 'tbr') { renderTbr(); stagger($('#tbr-list')); }
     else renderStats();
+    if (!$('#shelf-view').hidden) renderShelf();
   }
 
   // ---------- Global click delegation ----------
@@ -1025,7 +1249,7 @@
     b.priority = !b.priority;
     save();
     renderTbr();
-    if (navigator.vibrate) navigator.vibrate(b.priority ? [8, 30, 12] : 6);
+    haptic(b.priority ? 'success' : 'light');
     const btn = $(`[data-star="${id}"]`);
     if (btn && b.priority) {
       btn.classList.add('pop');
@@ -1215,7 +1439,7 @@
     editing = null; editStart = null;
     if (!book.coverUrl && !book.isbn) autoCover(book);
     if (start && start.status === 'tbr' && book.status === 'read') {
-      celebrate(book, newBadges(start.badges));
+      finishWithFlair(book, newBadges(start.badges));
       if (ui.tab !== 'read') setTab('read'); else render();
     } else render();
   });
@@ -1401,7 +1625,7 @@
     updateCoverPreview();
     syncFormVisibility();
     $('#save-book').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    if (navigator.vibrate) navigator.vibrate(10);
+    haptic();
   }
 
   // ---------- Finish a TBR ----------
@@ -1415,7 +1639,7 @@
     if (!finishing) return;
     finishBtn = btn;
     btn.classList.add('done');
-    if (navigator.vibrate) navigator.vibrate(12);
+    haptic();
     finForm.reset();
     finForm.dateFinished.value = today();
     setSeg(finFormat, 'read');
@@ -1440,11 +1664,13 @@
       audioMinutes: segValue(finFormat) === 'listen' ? Math.round(num(finForm.audioH.value) * 60 + num(finForm.audioM.value)) : 0,
     });
     save();
+    const badgesNow = newBadges(before);
+    const leaving = document.querySelector(`[data-finish="${b.id}"]`)?.closest('.tbr-item');
     finishing = null;
     finDlg.close();
     openBuy.delete(b.id);
-    render();
-    celebrate(b, newBadges(before));
+    if (leaving) leaving.classList.add('leaving');
+    setTimeout(() => { render(); finishWithFlair(b, badgesNow); }, leaving ? 330 : 0);
   });
 
   // ---------- Pick my next read ----------
@@ -1469,7 +1695,7 @@
         stage.classList.remove('spinning');
         show(final);
         $('#pick-links').innerHTML = buyLinks(final);
-        if (navigator.vibrate) navigator.vibrate([10, 40, 20]);
+        haptic('success');
         return;
       }
       show(list[i++ % list.length]);
@@ -1480,6 +1706,35 @@
   }
   $('#random-btn').addEventListener('click', openPick);
   $('#pick-again').addEventListener('click', () => { pickDlg.close(); openPick(); });
+
+  // ---------- Finishing flair: card shrinks away, pages flip, cover closes, then confetti ----------
+  function bookCloseAnim(book) {
+    return new Promise((resolve) => {
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) return resolve();
+      const o = document.createElement('div');
+      o.className = 'book-anim';
+      o.innerHTML = `<div class="ba-book"><div class="ba-pages"></div><div class="ba-page p1"></div><div class="ba-page p2"></div><div class="ba-page p3"></div><div class="ba-cover">${coverHTML(book)}</div></div><p class="ba-label">The end.</p>`;
+      document.body.appendChild(o);
+      setTimeout(() => haptic(), 180); setTimeout(() => haptic(), 330); setTimeout(() => haptic(), 480);
+      setTimeout(() => haptic('heavy'), 900); // the thud
+      setTimeout(() => o.classList.add('out'), 1250);
+      setTimeout(() => { o.remove(); resolve(); }, 1500);
+    });
+  }
+  function finishWithFlair(book, badges) {
+    bookCloseAnim(book).then(() => celebrate(book, badges));
+  }
+  const THEMES = {
+    embers: { label: '🔥 Dragon fire', test: /dragon|wing|flame|fire|ember|burn|ash\b|blaze|spark|brimstone|smoke|onyx/ },
+    bubbles: { label: '🫧 Sea spray', test: /\bsea\b|tide|ocean|water|mermaid|siren|wave|thunder/ },
+    stars: { label: '✨ Starlight', test: /night|star|moon|shadow|dark|dusk|midnight|stardust|eclipse|raven/ },
+    petals: { label: '🌸 Fae petals', test: /\bfae\b|court|rose|thorn|bloom|flower|petal|garden|briar|fairy|wild|crystal/ },
+  };
+  function celebrationTheme(b) {
+    const text = `${b.title} ${b.series || ''} ${(b.tags || []).join(' ')}`.toLowerCase();
+    for (const [k, t] of Object.entries(THEMES)) if (t.test.test(text)) return k;
+    return 'confetti';
+  }
 
   // ---------- Milestones ----------
   const MILESTONES = [
@@ -1548,8 +1803,10 @@
     const u = book.series ? seriesUpNext().find((x) => x.name === book.series && !x.onTbr) : null;
     $('#celebrate-next').innerHTML = u ? `<button type="button" class="btn" data-upnext="${esc(u.name)}">⏭️ Add book ${u.next} of ${esc(u.name)} to TBR</button>` : '';
     el.hidden = false;
-    if (navigator.vibrate) navigator.vibrate(ms.length ? [20, 50, 20, 50, 20, 50, 80] : [15, 60, 25, 60, 40]);
-    confetti(ms.length ? 340 : badges.length ? 260 : 160);
+    haptic('success');
+    const theme = celebrationTheme(book);
+    $('#celebrate-theme').textContent = THEMES[theme]?.label || '';
+    confetti(ms.length ? 340 : badges.length ? 260 : 170, ms.length ? 'confetti' : theme);
     applyCoverTheme();
     $('#celebrate-close').focus({ preventScroll: true });
   }
@@ -1560,42 +1817,70 @@
 
   // Hand-rolled confetti: no libraries needed.
   let confettiRaf = 0;
-  function confetti(n) {
+  function confetti(n, theme = 'confetti') {
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const c = $('#confetti'), ctx = c.getContext('2d');
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const W = (c.width = innerWidth * dpr), H = (c.height = innerHeight * dpr);
-    const colors = ['#c4553a', '#e0a526', '#2f6f62', '#5b4a8a', '#3b6ea5', '#f28cb1', '#ffffff'];
-    const shapes = ['rect', 'rect', 'circle', 'book'];
-    const parts = Array.from({ length: n }, (_, i) => {
-      const fromLeft = i % 2 === 0;
-      return {
-        x: fromLeft ? 0 : W, y: H * 0.7,
-        vx: (fromLeft ? 1 : -1) * (6 + Math.random() * 10) * dpr,
-        vy: -(14 + Math.random() * 14) * dpr,
-        s: (5 + Math.random() * 6) * dpr,
-        r: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.3,
-        c: colors[i % colors.length], shape: shapes[i % shapes.length],
-        life: 0,
-      };
-    });
+    const R = Math.random;
+    const make = {
+      confetti: (i) => {
+        const fromLeft = i % 2 === 0;
+        const colors = ['#c4553a', '#e0a526', '#2f6f62', '#5b4a8a', '#3b6ea5', '#f28cb1', '#ffffff'];
+        return { x: fromLeft ? 0 : W, y: H * 0.7, vx: (fromLeft ? 1 : -1) * (6 + R() * 10) * dpr, vy: -(14 + R() * 14) * dpr, g: 0.45,
+          s: (5 + R() * 6) * dpr, r: R() * Math.PI, vr: (R() - 0.5) * 0.3, c: colors[i % colors.length], shape: ['rect', 'rect', 'circle', '📖'][i % 4] };
+      },
+      embers: (i) => ({ x: R() * W, y: H + R() * H * 0.3, vx: (R() - 0.5) * 1.5 * dpr, vy: -(3 + R() * 6) * dpr, g: -0.02, s: (2 + R() * 4) * dpr,
+        c: ['#ffb347', '#ff7a1a', '#ff3d00', '#ffd27a'][i % 4], shape: i % 14 === 0 ? '🔥' : 'glow', flick: R() * 6 }),
+      petals: (i) => ({ x: R() * W, y: -R() * H * 0.6, vx: (R() - 0.5) * 1.2 * dpr, vy: (1.5 + R() * 2.5) * dpr, g: 0.01, s: (6 + R() * 7) * dpr,
+        r: R() * Math.PI, vr: (R() - 0.5) * 0.08, sway: R() * 6, c: ['#f7a8c4', '#f28cb1', '#ffd1e0', '#e45b8f', '#fff0f5'][i % 5], shape: i % 12 === 0 ? (i % 24 ? '🌸' : '🌹') : 'petal' }),
+      stars: (i) => ({ x: R() * W, y: R() * H, vx: (R() - 0.5) * 0.4 * dpr, vy: (R() - 0.5) * 0.4 * dpr, g: 0, s: (4 + R() * 8) * dpr,
+        tw: R() * 6, c: ['#ffe9a8', '#ffffff', '#e0a526', '#c9d8ff'][i % 4], shape: i % 15 === 0 ? '✨' : 'star', born: R() * 1200 }),
+      bubbles: (i) => ({ x: R() * W, y: H + R() * H * 0.4, vx: 0, vy: -(1.5 + R() * 3) * dpr, g: -0.01, s: (5 + R() * 12) * dpr,
+        sway: R() * 6, c: 'rgba(170,220,255,.85)', shape: i % 16 === 0 ? '🫧' : 'bubble' }),
+    };
+    const gen = make[theme] || make.confetti;
+    const parts = Array.from({ length: theme === 'confetti' ? n : Math.round(n * 0.8) }, (_, i) => gen(i));
     const start = performance.now();
     cancelAnimationFrame(confettiRaf);
+    const star = (x, y, r) => { ctx.beginPath(); for (let k = 0; k < 8; k++) { const rr = k % 2 ? r * 0.38 : r, a = (k * Math.PI) / 4; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); };
     const tick = (t) => {
+      const el = t - start;
       ctx.clearRect(0, 0, W, H);
       let alive = 0;
       for (const p of parts) {
-        p.vy += 0.45 * dpr; p.vx *= 0.985; p.vy *= 0.985;
-        p.x += p.vx; p.y += p.vy; p.r += p.vr;
-        if (p.y > H + 20) continue;
+        p.vy += p.g * dpr;
+        if (theme === 'confetti') { p.vx *= 0.985; p.vy *= 0.985; }
+        p.x += p.vx + (p.sway ? Math.sin(el / 400 + p.sway) * 0.8 * dpr : 0);
+        p.y += p.vy;
+        if (p.r !== undefined) p.r += p.vr || 0;
+        if (p.y > H + 40 || p.y < -H) continue;
         alive++;
-        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c;
-        if (p.shape === 'circle') { ctx.beginPath(); ctx.arc(0, 0, p.s / 2, 0, Math.PI * 2); ctx.fill(); }
-        else if (p.shape === 'book') { ctx.font = `${p.s * 2.2}px serif`; ctx.fillText('📖', -p.s, p.s); }
-        else ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2);
+        ctx.save();
+        if (p.shape.length <= 2) { ctx.font = `${p.s * 2.2}px serif`; ctx.fillText(p.shape, p.x - p.s, p.y + p.s); ctx.restore(); continue; }
+        ctx.fillStyle = p.c;
+        if (p.shape === 'glow') {
+          ctx.globalAlpha = 0.55 + 0.45 * Math.sin(el / 90 + p.flick);
+          ctx.shadowColor = p.c; ctx.shadowBlur = 12 * dpr;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.s, 0, Math.PI * 2); ctx.fill();
+        } else if (p.shape === 'petal') {
+          ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.beginPath(); ctx.ellipse(0, 0, p.s, p.s * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+        } else if (p.shape === 'star') {
+          const life = Math.max(0, el - p.born);
+          ctx.globalAlpha = Math.max(0, Math.min(1, life / 300)) * (0.5 + 0.5 * Math.sin(el / 160 + p.tw)) * Math.max(0, 1 - el / 5200);
+          ctx.shadowColor = p.c; ctx.shadowBlur = 10 * dpr; star(p.x, p.y, p.s);
+          if (el > 5200) alive--;
+        } else if (p.shape === 'bubble') {
+          ctx.strokeStyle = p.c; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); ctx.arc(p.x, p.y, p.s, 0, Math.PI * 2); ctx.stroke();
+          ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.beginPath(); ctx.arc(p.x - p.s * 0.35, p.y - p.s * 0.35, p.s * 0.22, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.translate(p.x, p.y); ctx.rotate(p.r);
+          if (p.shape === 'circle') { ctx.beginPath(); ctx.arc(0, 0, p.s / 2, 0, Math.PI * 2); ctx.fill(); }
+          else ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2);
+        }
         ctx.restore();
       }
-      if (alive && t - start < 6000) confettiRaf = requestAnimationFrame(tick);
+      if (alive > 0 && el < 6500) confettiRaf = requestAnimationFrame(tick);
       else ctx.clearRect(0, 0, W, H);
     };
     confettiRaf = requestAnimationFrame(tick);
@@ -1986,6 +2271,134 @@
     try { await navigator.clipboard.writeText(link); toast('Link copied — paste it into your Shortcut 📋'); }
     catch (_) { prompt('Copy this link:', link); }
   });
+
+  // ---------- Bookshelf: its own special room ----------
+  function openShelf() {
+    $('#shelf-view').hidden = false;
+    document.body.classList.add('no-scroll');
+    renderShelf();
+    haptic();
+  }
+  function closeShelf() {
+    $('#shelf-view').classList.add('closing');
+    setTimeout(() => { $('#shelf-view').hidden = true; $('#shelf-view').classList.remove('closing'); document.body.classList.remove('no-scroll'); }, 220);
+  }
+  function shelfBook(g) {
+    const lean = hash(g.title) % 9 === 0 ? (hash(g.title) % 2 ? 4 : -4) : 0;
+    return `<button type="button" class="shelf-book" data-shelf="${g.id}" style="--lean:${lean}deg" aria-label="${esc(g.title)}">${coverHTML(g)}${g.logs?.length > 1 ? `<span class="sb-times">×${g.logs.length}</span>` : ''}</button>`;
+  }
+  function renderShelf() {
+    const mode = ui.shelfMode || 'series';
+    $$('#shelf-modes .chip').forEach((c) => c.setAttribute('aria-selected', String(c.dataset.mode === mode)));
+    const books = groupReads(readBooks());
+    const prog = new Map(seriesProgress().map((x) => [x.name, x]));
+    let groups = [];
+    if (mode === 'series') {
+      const map = new Map();
+      sortBooks(books, 'series').forEach((g) => { const k = g.series || ''; (map.get(k) || map.set(k, []).get(k)).push(g); });
+      groups = [...map.entries()].map(([k, list]) => {
+        const p = prog.get(k);
+        return { name: k || 'Standalones', meta: k ? `${p?.complete ? '✓ ' : ''}${p ? `${p.done}/${p.total}` : ''}` : `${list.length}`, list };
+      });
+    } else if (mode === 'color') {
+      ensureColors(books, () => { if (!$('#shelf-view').hidden) renderShelf(); });
+      groups = [{ name: 'A rainbow of reads', meta: '', list: byColor(books) }];
+    } else if (mode === 'recent') {
+      groups = [{ name: 'Most recent first', meta: '', list: [...books].sort(newestFirst) }];
+    } else {
+      groups = [{ name: 'A → Z', meta: '', list: sortBooks(books, 'title') }];
+    }
+    $('#shelf-stats').textContent = `${books.length} books · ${seriesProgress().filter((x) => x.complete).length} series finished`;
+    $('#shelf-body').innerHTML = groups.map((gr) => `<div class="shelf-group">
+        <div class="plaque"><span>${esc(gr.name)}</span>${gr.meta ? `<small>${gr.meta}</small>` : ''}</div>
+        <div class="shelf-row">${gr.list.map(shelfBook).join('')}</div></div>`).join('');
+  }
+  function showShelfBook(id) {
+    const g = groupReads(readBooks()).find((x) => x.id === id || x.logs.some((l) => l.id === id));
+    if (!g) return;
+    const reads = g.logs.filter((x) => x.format !== 'listen').length, listens = g.logs.length - reads;
+    const how = reads && listens ? '📖🎧 Read & listened' : listens ? '🎧 Listened' : '📖 Read';
+    const p = g.series ? seriesProgress().find((x) => x.name === g.series) : null;
+    $('#shelf-detail').innerHTML = `<div class="sd-cover">${coverHTML(g)}</div>
+      <div class="sd-info">
+        <h3>${esc(g.title)}</h3>
+        ${g.author ? `<p class="sd-by">${esc(g.author)}</p>` : ''}
+        ${g.series ? `<p class="sd-series">${esc(g.series)}${g.seriesNo ? ` · Book ${g.seriesNo}` : ''}${p ? ` of ${p.total}` : ''}</p>` : ''}
+        <p class="sd-meta">${how}${g.logs.length > 1 ? ` · ×${g.logs.length}` : ''}${g.pages ? ` · ${fmt(g.pages)} pp` : ''}</p>
+        ${g.rating ? `<p class="stars">${starStr(g.rating)}</p>` : ''}${g.spice ? `<p class="spice">${spiceStr(g.spice)}</p>` : ''}
+        <div class="sd-actions"><button type="button" class="btn primary" data-edit="${g.id}">✏️ Open</button><button type="button" class="btn ghost" id="sd-back">Put it back</button></div>
+      </div>`;
+    $('#shelf-detail').hidden = false;
+    $('#shelf-scrim').hidden = false;
+    haptic();
+  }
+  function hideShelfBook() { $('#shelf-detail').hidden = true; $('#shelf-scrim').hidden = true; }
+  $('#shelf-btn').addEventListener('click', openShelf);
+  $('#shelf-close').addEventListener('click', closeShelf);
+  $('#shelf-scrim').addEventListener('click', hideShelfBook);
+  $('#shelf-view').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-shelf]');
+    if (b) { b.classList.add('pulled'); setTimeout(() => b.classList.remove('pulled'), 400); showShelfBook(b.dataset.shelf); return; }
+    if (e.target.closest('#sd-back')) { hideShelfBook(); return; }
+    if (e.target.closest('[data-edit]')) hideShelfBook();
+    const m = e.target.closest('[data-mode]');
+    if (m) { ui.shelfMode = m.dataset.mode; saveUi(); renderShelf(); $('#shelf-body').scrollTop = 0; haptic(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || $('#shelf-view').hidden || document.querySelector('dialog[open]')) return;
+    if (!$('#shelf-detail').hidden) hideShelfBook(); else closeShelf();
+  });
+
+  // ---------- Pull to refresh (every tab) ----------
+  async function refreshAll() {
+    const t0 = Date.now();
+    let msg;
+    if (sync.token) {
+      const m = await syncFromWebsite({ force: true });
+      msg = sync.status === 'error' ? '⚠️ Couldn’t sync — your changes are safe here' : m && m.remoteNewer ? 'Got your latest changes ☁️' : 'All up to date ✅';
+    } else {
+      try {
+        const before = state.books.length;
+        importText(await fetchPublished(), 'books.json', { quiet: true });
+        const added = state.books.length - before;
+        msg = added ? `Added ${added} new book${added === 1 ? '' : 's'} 📚` : 'All up to date ✅';
+      } catch (_) { msg = 'Couldn’t reach the website — are you offline?'; }
+    }
+    await new Promise((r) => setTimeout(r, Math.max(0, 700 - (Date.now() - t0)))); // let the spinner flip a little
+    render(); applyCoverTheme();
+    toast(msg);
+  }
+  (function pullToRefresh() {
+    const ind = document.createElement('div');
+    ind.className = 'ptr';
+    ind.innerHTML = '<div class="ptr-book"><i></i><i></i><i></i></div><small>Pull to refresh</small>';
+    document.body.appendChild(ind);
+    let startY = null, busy = false, pulled = 0;
+    const blocked = () => busy || document.querySelector('dialog[open]') || !$('#shelf-view').hidden || !$('#stories').hidden || !$('#celebrate').hidden;
+    const reset = () => { ind.classList.remove('ready', 'spinning', 'show'); ind.style.removeProperty('--pull'); ind.querySelector('small').textContent = 'Pull to refresh'; pulled = 0; };
+    addEventListener('touchstart', (e) => { startY = scrollY <= 0 && !blocked() ? e.touches[0].clientY : null; }, { passive: true });
+    addEventListener('touchmove', (e) => {
+      if (startY === null) return;
+      const dy = e.touches[0].clientY - startY;
+      if (dy <= 0 || scrollY > 0) { if (pulled) reset(); return; }
+      pulled = Math.min(120, dy * 0.5);
+      ind.classList.add('show');
+      ind.style.setProperty('--pull', pulled);
+      const ready = pulled >= 70;
+      if (ready && !ind.classList.contains('ready')) haptic();
+      ind.classList.toggle('ready', ready);
+      ind.querySelector('small').textContent = ready ? 'Release to refresh' : 'Pull to refresh';
+    }, { passive: true });
+    addEventListener('touchend', async () => {
+      if (startY === null) return;
+      startY = null;
+      if (!ind.classList.contains('ready')) { reset(); return; }
+      busy = true;
+      ind.classList.add('spinning');
+      ind.querySelector('small').textContent = sync.token ? 'Syncing…' : 'Checking the website…';
+      try { await refreshAll(); } finally { busy = false; reset(); }
+    });
+  })();
 
   // ---------- Boot ----------
   setTab(ui.tab);
